@@ -41,7 +41,7 @@
           inherit src buildInputs;
         };
 
-        libraries = [ ];
+        libraries = with pkgs; [ openssl ];
         # Compile all artifacts
         appDeps = craneLib.buildDepsOnly commonArgs;
 
@@ -62,7 +62,10 @@
         devShells.default = craneLib.devShell {
           inherit buildInputs;
 
-          packages = [ toolchain ];
+          packages = with pkgs; [
+          openssl.dev
+            toolchain
+          ];
 
           LD_LIBRARY_PATH = "${pkgs.lib.makeLibraryPath libraries}";
         };
