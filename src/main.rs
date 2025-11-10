@@ -8,14 +8,14 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{Notify, RwLock, mpsc, watch};
+use tokio::sync::{RwLock, mpsc, watch};
 use tokio::time::timeout;
 use tokio_native_tls::{TlsConnector, native_tls};
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::filter::LevelFilter;
 use url::Url;
 
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 use rml_rtmp::sessions::{
@@ -99,6 +99,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             accept = listener.accept() => {
                 match accept {
                     Ok((socket, peer_addr)) => {
+                        // reduce latency: disable Nagle on incoming socket
+                        if let Err(e) = socket.set_nodelay(true) {
+                            warn!("No se pudo set_nodelay al socket entrante: {}", e);
+                        }
+
                         info!("Nueva conexión entrante desde {}", peer_addr);
                         let platforms = platforms.clone();
                         let stream_key = stream_key.clone();
@@ -121,11 +126,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Handshake server side and create ServerSession with lower-latency config
 async fn handshake_and_create_server_session(
     stream: &mut TcpStream,
 ) -> Result<(ServerSession, Vec<u8>), Box<dyn std::error::Error + Send + Sync>> {
-    use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
-
     let mut hs = Handshake::new(PeerType::Server);
     let mut buf = [0u8; 4096];
     let mut leftover = Vec::new();
@@ -155,7 +159,11 @@ async fn handshake_and_create_server_session(
         }
     }
 
-    let config = ServerSessionConfig::new();
+    // Reduce latency: use smaller chunk size and smaller ack window to have quicker acks
+    let mut config = ServerSessionConfig::new();
+    config.chunk_size = 128; // smaller chunks -> lower per-chunk latency (tradeoff CPU)
+    config.window_ack_size = 262_144; // 256KB ack window to get more frequent acks
+
     let (server_session, initial_results) = ServerSession::new(config)?;
     for res in initial_results {
         if let ServerSessionResult::OutboundResponse(packet) = res {
@@ -198,17 +206,14 @@ async fn perform_client_handshake(
 }
 
 struct PushClient {
-    tx_feed: mpsc::UnboundedSender<Bytes>,
+    tx_feed: mpsc::Sender<Bytes>, // bounded to avoid unbounded memory growth
     client_state: Arc<RwLock<ClientStateWrapper>>,
     publish_ready_rx: watch::Receiver<bool>,
-
-    notify: Arc<Notify>,
 }
 
 struct ClientStateWrapper {
     session: ClientSession,
     target_stream: String,
-
     prepublish_video_buffer: VecDeque<Bytes>,
     prepublish_audio_buffer: VecDeque<Bytes>,
     prepublish_metadata: Option<StreamMetadata>,
@@ -216,7 +221,6 @@ struct ClientStateWrapper {
 
 trait AsyncReadWrite: AsyncRead + AsyncWrite + Send + Unpin {}
 impl<T: AsyncRead + AsyncWrite + Send + Unpin> AsyncReadWrite for T {}
-
 type DynStream = Box<dyn AsyncReadWrite + 'static>;
 
 impl PushClient {
@@ -233,8 +237,17 @@ impl PushClient {
 
         info!("Conectando push client a {}", addr);
 
+        // Connect TCP
         let tcp_stream = TcpStream::connect(&addr).await?;
+        // reduce latency on TCP
+        if let Err(e) = tcp_stream.set_nodelay(true) {
+            warn!(
+                "No se pudo set_nodelay al tcp de push client {}: {}",
+                addr, e
+            );
+        }
 
+        // Wrap TLS if needed
         let mut boxed: DynStream = if url.scheme() == "rtmps" {
             let native = native_tls::TlsConnector::builder()
                 .danger_accept_invalid_certs(true)
@@ -249,10 +262,12 @@ impl PushClient {
         perform_client_handshake(&mut boxed).await?;
         info!("Handshake cliente completo hacia {}", addr);
 
+        // split reader/writer
         let (mut rd_half, mut wr_half) = tokio::io::split(boxed);
 
+        // client config with lower chunk size
         let mut client_cfg = ClientSessionConfig::new();
-
+        client_cfg.chunk_size = 128;
         let path = url.path().trim_start_matches('/');
         let app_segment = path.split('/').next().unwrap_or("");
         let tcurl = if app_segment.is_empty() {
@@ -264,7 +279,8 @@ impl PushClient {
 
         let (mut client_session, initial_results) = ClientSession::new(client_cfg)?;
 
-        let (tx, mut rx) = mpsc::unbounded_channel::<Bytes>();
+        // bounded channel: capacity 256 to avoid unbounded growth when a remote is slow
+        let (tx, mut rx) = mpsc::channel::<Bytes>(256);
         let writer_addr = addr.clone();
         tokio::spawn(async move {
             while let Some(bytes) = rx.recv().await {
@@ -276,16 +292,22 @@ impl PushClient {
             info!("Writer task terminado para push target {}", writer_addr);
         });
 
+        // send initial results (use try_send, drop if full)
         for r in initial_results {
             if let ClientSessionResult::OutboundResponse(packet) = r {
-                let _ = tx.send(Bytes::from(packet.bytes.clone()));
+                if let Err(e) = tx.try_send(Bytes::from(packet.bytes.clone())) {
+                    debug!("Dropped initial packet for {}: {}", addr, e);
+                }
             }
         }
 
+        // request connection (app extracted from URL)
         let app = app_segment.to_string();
         match client_session.request_connection(app.clone()) {
             Ok(ClientSessionResult::OutboundResponse(packet)) => {
-                let _ = tx.send(Bytes::from(packet.bytes.clone()));
+                if let Err(e) = tx.try_send(Bytes::from(packet.bytes.clone())) {
+                    debug!("Dropped connect packet for {}: {}", addr, e);
+                }
             }
             Ok(_) => {}
             Err(e) => {
@@ -300,17 +322,16 @@ impl PushClient {
             prepublish_audio_buffer: VecDeque::new(),
             prepublish_metadata: None,
         };
+
         let client_state = Arc::new(RwLock::new(client_state));
-
         let (publish_ready_tx, publish_ready_rx) = watch::channel(false);
-        let notify = Arc::new(Notify::new());
 
+        // reader task: advance client session based on remote responses
         {
             let client_state_reader = client_state.clone();
             let tx_clone = tx.clone();
             let addr_clone = addr.clone();
             let publish_ready_tx = publish_ready_tx.clone();
-            let notify = notify.clone();
 
             tokio::spawn(async move {
                 let mut buf = [0u8; 8192];
@@ -324,14 +345,22 @@ impl PushClient {
                             let mut state = client_state_reader.write().await;
 
                             // Protect handle_input from unwinding panics inside the library
-                            let res = catch_unwind(AssertUnwindSafe(|| state.session.handle_input(&buf[..n])));
+                            let res = catch_unwind(AssertUnwindSafe(|| {
+                                state.session.handle_input(&buf[..n])
+                            }));
                             match res {
                                 Ok(Ok(results)) => {
                                     for r in results {
                                         match r {
                                             ClientSessionResult::OutboundResponse(packet) => {
-                                                let _ = tx_clone
-                                                    .send(Bytes::from(packet.bytes.clone()));
+                                                if let Err(e) = tx_clone
+                                                    .try_send(Bytes::from(packet.bytes.clone()))
+                                                {
+                                                    debug!(
+                                                        "Dropped outbound packet to {}: {}",
+                                                        addr_clone, e
+                                                    );
+                                                }
                                             }
                                             ClientSessionResult::RaisedEvent(ev) => {
                                                 debug!("Push client evento: {:?}", ev);
@@ -340,7 +369,9 @@ impl PushClient {
                                                         let stream_key = state.target_stream.clone();
                                                         match state.session.request_publishing(stream_key, PublishRequestType::Live) {
                                                             Ok(ClientSessionResult::OutboundResponse(pub_packet)) => {
-                                                                let _ = tx_clone.send(Bytes::from(pub_packet.bytes.clone()));
+                                                                if let Err(e) = tx_clone.try_send(Bytes::from(pub_packet.bytes.clone())) {
+                                                                    debug!("Dropped publish request packet for {}: {}", addr_clone, e);
+                                                                }
                                                             }
                                                             Ok(_) => {}
                                                             Err(e) => {
@@ -357,7 +388,9 @@ impl PushClient {
                                                         if let Some(meta) = state.prepublish_metadata.take() {
                                                             match state.session.publish_metadata(&meta) {
                                                                 Ok(ClientSessionResult::OutboundResponse(packet)) => {
-                                                                    let _ = tx_clone.send(Bytes::from(packet.bytes.clone()));
+                                                                    if let Err(e) = tx_clone.try_send(Bytes::from(packet.bytes.clone())) {
+                                                                        debug!("Dropped buffered metadata packet for {}: {}", addr_clone, e);
+                                                                    }
                                                                 }
                                                                 Ok(_) => {}
                                                                 Err(e) => {
@@ -370,7 +403,9 @@ impl PushClient {
                                                         while let Some(vframe) = state.prepublish_video_buffer.pop_front() {
                                                             match state.session.publish_video_data(vframe.clone(), RtmpTimestamp::new(0), true) {
                                                                 Ok(ClientSessionResult::OutboundResponse(packet)) => {
-                                                                    let _ = tx_clone.send(Bytes::from(packet.bytes.clone()));
+                                                                    if let Err(e) = tx_clone.try_send(Bytes::from(packet.bytes.clone())) {
+                                                                        debug!("Dropped buffered video packet for {}: {}", addr_clone, e);
+                                                                    }
                                                                 }
                                                                 Ok(_) => {}
                                                                 Err(e) => {
@@ -384,7 +419,9 @@ impl PushClient {
                                                         while let Some(aframe) = state.prepublish_audio_buffer.pop_front() {
                                                             match state.session.publish_audio_data(aframe.clone(), RtmpTimestamp::new(0), true) {
                                                                 Ok(ClientSessionResult::OutboundResponse(packet)) => {
-                                                                    let _ = tx_clone.send(Bytes::from(packet.bytes.clone()));
+                                                                    if let Err(e) = tx_clone.try_send(Bytes::from(packet.bytes.clone())) {
+                                                                        debug!("Dropped buffered audio packet for {}: {}", addr_clone, e);
+                                                                    }
                                                                 }
                                                                 Ok(_) => {}
                                                                 Err(e) => {
@@ -411,7 +448,10 @@ impl PushClient {
                                     break;
                                 }
                                 Err(panic_err) => {
-                                    error!("panic al procesar ClientSession::handle_input (push): {:?}", panic_err);
+                                    error!(
+                                        "panic al procesar ClientSession::handle_input (push): {:?}",
+                                        panic_err
+                                    );
                                     break;
                                 }
                             }
@@ -432,99 +472,27 @@ impl PushClient {
             tx_feed: tx,
             client_state,
             publish_ready_rx,
-            notify,
         })
-    }
-
-    async fn feed_bytes(&self, bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
-        // kept for compatibility but no longer used to feed publisher bytes into push client sessions
-        let mut state = self.client_state.write().await;
-        let results = state.session.handle_input(bytes)?;
-        for r in results {
-            match r {
-                ClientSessionResult::OutboundResponse(packet) => {
-                    let _ = self.tx_feed.send(Bytes::from(packet.bytes.clone()));
-                }
-                ClientSessionResult::RaisedEvent(ev) => {
-                    debug!("Client event: {:?}", ev);
-                    if let ClientSessionEvent::ConnectionRequestAccepted = ev {
-                        let stream_key = state.target_stream.clone();
-                        if let Ok(res) = state
-                            .session
-                            .request_publishing(stream_key, PublishRequestType::Live)
-                        {
-                            match res {
-                                ClientSessionResult::OutboundResponse(packet) => {
-                                    let _ = self.tx_feed.send(Bytes::from(packet.bytes.clone()));
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        Ok(())
     }
 }
 
 async fn handle_publisher(
     mut inbound: TcpStream,
     platforms: Arc<RwLock<Vec<Platform>>>,
-    _stream_key: String,
+    stream_key_conf: String,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("Iniciando handshake servidor con client entrante...");
     let (mut server_session, leftover) = handshake_and_create_server_session(&mut inbound).await?;
-    info!("Handshake completado; creando push clients...");
+    info!("Handshake completado; esperando publish request...");
 
+    // Cargamos la lista de plataformas pero NO creamos conexiones push todavía.
     let pls = platforms.read().await.clone();
+    // Aquí guardaremos los push clients una vez que aceptemos el publish del publisher.
     let mut push_clients: Vec<PushClient> = Vec::new();
 
-    for p in pls.into_iter() {
-        if !["rtmp", "rtmps"].contains(&p.url.scheme()) {
-            info!(
-                "Ignorando plataforma con esquema distinto a rtmp/rtmps: scheme = {} url = {}",
-                p.url.scheme(),
-                p.url
-            );
-            continue;
-        }
-
-        let host = match p.url.host_str() {
-            Some(h) => h.to_string(),
-            None => {
-                warn!("URL sin host válido: {}", p.url);
-                continue;
-            }
-        };
-        let port = p.url.port_or_known_default().unwrap_or(1935);
-        let addr = format!("{}:{}", host, port);
-
-        match timeout(
-            Duration::from_secs(10),
-            PushClient::connect_and_publish(&p.url, p.key.clone()),
-        )
-        .await
-        {
-            Ok(Ok(push_client)) => {
-                info!("Push client activo hacia {}", addr);
-                push_clients.push(push_client);
-            }
-            Ok(Err(e)) => {
-                warn!("Push client falló al iniciar hacia {}: {}", p.url, e);
-            }
-            Err(_) => {
-                warn!("Timeout conectando a {} para push", addr);
-            }
-        }
-    }
-
-    if push_clients.is_empty() {
-        warn!("No hay push clients activos; cerrando conexión del publisher.");
-        return Ok(());
-    }
-
+    // Si hubo bytes sobrantes tras el handshake, procesarlos.
+    // Es posible que entre esos bytes ya venga la solicitud de publish; se procesará
+    // y el branch PublishStreamRequested creará los push clients cuando corresponda.
     if !leftover.is_empty() {
         let results = server_session.handle_input(&leftover)?;
         for res in results {
@@ -563,13 +531,13 @@ async fn handle_publisher(
 
         for res in results {
             match res {
-                // IMPORTANT: only respond to the publisher with ServerSession OutboundResponse.
-                // Do NOT forward these packets to push clients (they are server->publisher packets).
+                // Respuestas del ServerSession van sólo al publisher.
                 ServerSessionResult::OutboundResponse(packet) => {
                     if let Err(e) = inbound.write_all(&packet.bytes).await {
                         error!("Error escribiendo al publisher: {:?}", e);
                     }
                 }
+
                 ServerSessionResult::RaisedEvent(ev) => match ev {
                     ServerSessionEvent::ConnectionRequested {
                         request_id,
@@ -583,24 +551,112 @@ async fn handle_publisher(
                             }
                         }
                     }
+
                     ServerSessionEvent::PublishStreamRequested {
                         request_id,
                         app_name,
                         stream_key,
                         ..
                     } => {
-                        if let Ok(out) = server_session.accept_request(request_id) {
-                            for r in out {
-                                if let ServerSessionResult::OutboundResponse(packet) = r {
-                                    let _ = inbound.write_all(&packet.bytes).await;
+                        // Validamos la stream key antes de aceptar y antes de iniciar retransmisiones.
+                        if stream_key == stream_key_conf {
+                            // Aceptamos la petición del publisher
+                            if let Ok(out) = server_session.accept_request(request_id) {
+                                for r in out {
+                                    if let ServerSessionResult::OutboundResponse(packet) = r {
+                                        let _ = inbound.write_all(&packet.bytes).await;
+                                    }
                                 }
                             }
+                            info!(
+                                "Publisher accepted publish app='{}' stream='{}'",
+                                app_name, stream_key
+                            );
+
+                            // Ahora que el publisher está autorizado, creamos los push clients
+                            // (si no existen ya). Esto evita iniciar retransmisiones para keys inválidas.
+                            if push_clients.is_empty() {
+                                for p in pls.iter() {
+                                    if !["rtmp", "rtmps"].contains(&p.url.scheme()) {
+                                        info!(
+                                            "Ignorando plataforma con esquema distinto a rtmp/rtmps: {}",
+                                            p.url
+                                        );
+                                        continue;
+                                    }
+
+                                    let host = match p.url.host_str() {
+                                        Some(h) => h.to_string(),
+                                        None => {
+                                            warn!("URL sin host válido: {}", p.url);
+                                            continue;
+                                        }
+                                    };
+                                    let port = p.url.port_or_known_default().unwrap_or(1935);
+                                    let addr = format!("{}:{}", host, port);
+
+                                    match timeout(
+                                        Duration::from_secs(10),
+                                        PushClient::connect_and_publish(&p.url, p.key.clone()),
+                                    )
+                                    .await
+                                    {
+                                        Ok(Ok(push_client)) => {
+                                            info!("Push client activo hacia {}", addr);
+                                            push_clients.push(push_client);
+                                        }
+                                        Ok(Err(e)) => {
+                                            warn!(
+                                                "Push client falló al iniciar hacia {}: {}",
+                                                p.url, e
+                                            );
+                                        }
+                                        Err(_) => {
+                                            warn!("Timeout conectando a {} para push", addr);
+                                        }
+                                    }
+                                }
+
+                                if push_clients.is_empty() {
+                                    warn!(
+                                        "No se pudieron iniciar push clients tras aceptar publish; se continuará pero no habrá retransmisión."
+                                    );
+                                } else {
+                                    info!(
+                                        "Retransmisiones iniciadas a {} plataformas",
+                                        push_clients.len()
+                                    );
+                                }
+                            } else {
+                                debug!("Push clients ya estaban creados; no se recrean.");
+                            }
+                        } else {
+                            // Rechazamos la petición si la stream key no coincide con la configurada.
+                            match server_session.reject_request(
+                                request_id,
+                                "NetStream.Publish.BadName",
+                                "Invalid stream key",
+                            ) {
+                                Ok(out) => {
+                                    for r in out {
+                                        if let ServerSessionResult::OutboundResponse(packet) = r {
+                                            let _ = inbound.write_all(&packet.bytes).await;
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!("Error rejecting publish request: {:?}", e);
+                                }
+                            }
+                            info!(
+                                "Publish rejected for invalid stream key '{}'; cerrando conexión.",
+                                stream_key
+                            );
+                            // Cerrar la conexión del publisher y terminar la función: no habrá retransmisiones.
+                            return Ok(());
                         }
-                        info!(
-                            "Publisher solicitó publicar app='{}' stream='{}'",
-                            app_name, stream_key
-                        );
                     }
+
                     ServerSessionEvent::VideoDataReceived {
                         data, timestamp, ..
                     } => {
@@ -613,7 +669,14 @@ async fn handle_publisher(
                                     true,
                                 ) {
                                     Ok(ClientSessionResult::OutboundResponse(packet)) => {
-                                        let _ = pc.tx_feed.send(Bytes::from(packet.bytes.clone()));
+                                        if let Err(e) =
+                                            pc.tx_feed.try_send(Bytes::from(packet.bytes.clone()))
+                                        {
+                                            debug!(
+                                                "Dropped publish_video_data packet for push client: {}",
+                                                e
+                                            );
+                                        }
                                     }
                                     Ok(_) => {}
                                     Err(e) => {
@@ -633,6 +696,7 @@ async fn handle_publisher(
                             }
                         }
                     }
+
                     ServerSessionEvent::AudioDataReceived {
                         data, timestamp, ..
                     } => {
@@ -645,7 +709,14 @@ async fn handle_publisher(
                                     true,
                                 ) {
                                     Ok(ClientSessionResult::OutboundResponse(packet)) => {
-                                        let _ = pc.tx_feed.send(Bytes::from(packet.bytes.clone()));
+                                        if let Err(e) =
+                                            pc.tx_feed.try_send(Bytes::from(packet.bytes.clone()))
+                                        {
+                                            debug!(
+                                                "Dropped publish_audio_data packet for push client: {}",
+                                                e
+                                            );
+                                        }
                                     }
                                     Ok(_) => {}
                                     Err(e) => {
@@ -665,18 +736,23 @@ async fn handle_publisher(
                             }
                         }
                     }
-                    ServerSessionEvent::StreamMetadataChanged {
-                        app_name: _,
-                        stream_key: _,
-                        metadata,
-                    } => {
+
+                    ServerSessionEvent::StreamMetadataChanged { metadata, .. } => {
                         for pc in push_clients.iter() {
                             if *pc.publish_ready_rx.borrow() {
                                 let mut state = pc.client_state.write().await;
                                 match state.session.publish_metadata(&metadata) {
                                     Ok(client_res) => match client_res {
                                         ClientSessionResult::OutboundResponse(packet) => {
-                                            let _ = pc.tx_feed.send(Bytes::from(packet.bytes.clone()));
+                                            if let Err(e) = pc
+                                                .tx_feed
+                                                .try_send(Bytes::from(packet.bytes.clone()))
+                                            {
+                                                debug!(
+                                                    "Dropped publish_metadata packet for push client: {}",
+                                                    e
+                                                );
+                                            }
                                         }
                                         _ => {}
                                     },
@@ -692,8 +768,10 @@ async fn handle_publisher(
                             }
                         }
                     }
+
                     _ => {}
                 },
+
                 other => {
                     debug!("Other server result: {:?}", other);
                 }
