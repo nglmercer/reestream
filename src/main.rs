@@ -17,6 +17,8 @@ use url::Url;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+mod provider;
+
 use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 use rml_rtmp::sessions::{
     ClientSession, ClientSessionConfig, ClientSessionEvent, ClientSessionResult,

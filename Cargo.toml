@@ -5,6 +5,12 @@ edition = "2024"
 
 [dependencies]
 bytes = "1.10"
+reqwest = { version = "0.12.24", default-features = false, features = [
+    "json",
+    "rustls-tls",
+    "system-proxy",
+    "http2",
+] }
 rml_rtmp = "0.8"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", default-features = false, features = [
