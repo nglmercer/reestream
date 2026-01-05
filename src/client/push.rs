@@ -3,7 +3,10 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
 use bytes::Bytes;
-use rml_rtmp::sessions::{ClientSession, ClientSessionConfig, ClientSessionEvent, ClientSessionResult, PublishRequestType, StreamMetadata};
+use rml_rtmp::sessions::{
+    ClientSession, ClientSessionConfig, ClientSessionEvent, ClientSessionResult,
+    PublishRequestType, StreamMetadata,
+};
 use rml_rtmp::time::RtmpTimestamp;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -38,7 +41,13 @@ impl PushClient {
             .host_str()
             .ok_or_else(|| format!("URL sin host válido: {}", url))?
             .to_string();
-        let port = url.port_or_known_default().unwrap_or(1935);
+
+        let port = if url.scheme() == "rtmps" {
+            443
+        } else {
+            url.port_or_known_default().unwrap_or(1935)
+        };
+
         let addr = format!("{}:{}", host, port);
 
         info!("Conectando push client a {}", addr);
