@@ -3,7 +3,6 @@ use rml_rtmp::sessions::{ServerSession, ServerSessionConfig, ServerSessionResult
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-
 /// Handshake server side and create ServerSession with lower-latency config
 pub async fn handshake_and_create_server_session(
     stream: &mut TcpStream,

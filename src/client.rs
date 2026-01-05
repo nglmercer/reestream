@@ -65,6 +65,7 @@ pub async fn handle_publisher(
     // Si hubo bytes sobrantes tras el handshake, procesarlos.
     // Es posible que entre esos bytes ya venga la solicitud de publish; se procesará
     // y el branch PublishStreamRequested creará los push clients cuando corresponda.
+
     if !leftover.is_empty() {
         let results = server_session.handle_input(&leftover)?;
         for res in results {
