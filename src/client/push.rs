@@ -39,7 +39,7 @@ impl PushClient {
     ) -> Result<PushClient, Box<dyn std::error::Error + Send + Sync>> {
         let host = url
             .host_str()
-            .ok_or_else(|| format!("URL sin host válido: {}", url))?
+            .ok_or_else(|| format!("URL sin host válido: {url}"))?
             .to_string();
 
         let port = if url.scheme() == "rtmps" {
@@ -48,9 +48,9 @@ impl PushClient {
             url.port_or_known_default().unwrap_or(1935)
         };
 
-        let addr = format!("{}:{}", host, port);
+        let addr = format!("{host}:{port}");
 
-        info!("Conectando push client a {}", addr);
+        info!("Conectando push client a {addr}");
 
         // Connect TCP
         let tcp_stream = TcpStream::connect(&addr).await?;

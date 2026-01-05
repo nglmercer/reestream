@@ -166,7 +166,7 @@ pub async fn handle_publisher(
                                         }
                                     };
                                     let port = p.url.port_or_known_default().unwrap_or(1935);
-                                    let addr = format!("{}:{}", host, port);
+                                    let addr = format!("{host}:{port}");
 
                                     match timeout(
                                         Duration::from_secs(10),
@@ -175,7 +175,7 @@ pub async fn handle_publisher(
                                     .await
                                     {
                                         Ok(Ok(push_client)) => {
-                                            info!("Push client activo hacia {}", addr);
+                                            info!("Push client activo hacia {addr}");
                                             push_clients.push(push_client);
                                         }
                                         Ok(Err(e)) => {
@@ -185,7 +185,7 @@ pub async fn handle_publisher(
                                             );
                                         }
                                         Err(_) => {
-                                            warn!("Timeout conectando a {} para push", addr);
+                                            warn!("Timeout conectando a {addr} para push");
                                         }
                                     }
                                 }
