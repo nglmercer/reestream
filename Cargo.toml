@@ -1,6 +1,6 @@
 [package]
 name = "reestream"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 authors = ["RustLangES contact@rustlang-es.org"]
 description = "rtmp multistream demuxer"
