@@ -43,6 +43,7 @@ pub struct OAuth2Config {
 }
 
 #[allow(dead_code)]
+#[allow(async_fn_in_trait)]
 pub trait StreamKeyProvider: Send + Sync {
     const NAME: &str;
 

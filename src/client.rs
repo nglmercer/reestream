@@ -1,4 +1,4 @@
-mod push;
+pub mod push;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -58,7 +58,7 @@ pub async fn handle_publisher(
     info!("Handshake completado; esperando publish request...");
 
     // Cargamos la lista de plataformas pero NO creamos conexiones push todavía.
-    let pls = platforms.read().await.clone();
+    let pls: Vec<Platform> = platforms.read().await.clone();
     // Aquí guardaremos los push clients una vez que aceptemos el publish del publisher.
     let mut push_clients: Vec<PushClient> = Vec::new();
 
@@ -158,7 +158,7 @@ pub async fn handle_publisher(
                                         continue;
                                     }
 
-                                    let host = match p.url.host_str() {
+                                    let host: String = match p.url.host_str() {
                                         Some(h) => h.to_string(),
                                         None => {
                                             warn!("URL sin host válido: {}", p.url);

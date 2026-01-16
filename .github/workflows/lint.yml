@@ -54,3 +54,12 @@ jobs:
 
       - name: Check documentation
         run: cargo doc --no-deps --all-features
+
+      - name: Run all tests
+        run: cargo test --all --all-features --verbose
+
+      - name: Check test coverage
+        run: |
+          cargo install cargo-tarpaulin
+          cargo tarpaulin --out Xml --output-dir ./coverage
+        if: success()
