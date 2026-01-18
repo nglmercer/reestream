@@ -91,21 +91,12 @@ pub async fn handle_publisher(
             n_res = inbound.read(&mut read_buf) => {
                 let n = match n_res {
                     Ok(0) => {
-                        // Input stream (OBS) finished. Perform graceful shutdown.
                         info!("Source stream ended (EOF). Shutting down push clients gracefully...");
-
-                        // Gracefully stop all push clients to notify remote servers (e.g., Facebook/YouTube)
-                        // that the stream is ending. This helps prevent "Stream already in use" errors
-                        // if you reconnect immediately.
                         for (i, pc) in push_clients.iter().enumerate() {
                             info!("Stopping client {}", i);
                             pc.shutdown().await;
                         }
-
-                        // Clear the vector to ensure destructors run before we break,
-                        // though they would run on scope exit anyway.
                         push_clients.clear();
-
                         break;
                     },
                     Ok(n) => n,
@@ -139,7 +130,6 @@ pub async fn handle_publisher(
                                         }
                                     }
 
-                                    // Only connect if we haven't already.
                                     if push_clients.is_empty() {
                                         for p in &pls {
                                             match timeout(Duration::from_secs(5), PushClient::connect_and_publish(&p.url, p.key.clone(), None, None, None)).await {
@@ -167,10 +157,10 @@ pub async fn handle_publisher(
                                     let mut state = pc.client_state.write().await;
                                     state.prepublish_metadata = Some(metadata.clone());
 
-                                    if *pc.publish_ready_rx.borrow() {
-                                        if let Ok(ClientSessionResult::OutboundResponse(packet)) = state.session.publish_metadata(&metadata) {
-                                            let _ = pc.tx_feed.try_send(Bytes::from(packet.bytes));
-                                        }
+                                    if *pc.publish_ready_rx.borrow()
+                                        && let Ok(ClientSessionResult::OutboundResponse(packet)) = state.session.publish_metadata(&metadata)
+                                    {
+                                        let _ = pc.tx_feed.try_send(Bytes::from(packet.bytes));
                                     }
                                 }
                             }
@@ -195,15 +185,12 @@ async fn forward_to_push_clients(
     for (i, pc) in push_clients.iter_mut().enumerate() {
         let mut state = pc.client_state.write().await;
 
-        // 1. Detectar y guardar headers
         if is_video && is_video_sequence_header(&data) {
             state.update_video_header(data.clone());
         } else if !is_video && is_audio_sequence_header(&data) {
             state.update_audio_header(data.clone());
         }
 
-        // 2. Verificar estado de conexión
-        // If the channel is closed, it means the background writer task died (likely due to network error or reader failure)
         if pc.tx_feed.is_closed() {
             let p_url = pc.url.clone();
             let p_key = pc.stream_key.clone();
@@ -213,7 +200,6 @@ async fn forward_to_push_clients(
             let cached_aud = state.audio_sequence_header.clone();
             let cached_meta = state.prepublish_metadata.clone();
 
-            // Liberamos lock antes de spawn
             drop(state);
 
             let (dummy_tx, mut dummy_rx) = mpsc::channel(1);
@@ -256,7 +242,6 @@ async fn forward_to_push_clients(
             continue;
         }
 
-        // 3. Envío o Buffer
         if *pc.publish_ready_rx.borrow() {
             let res = if is_video {
                 state
@@ -271,13 +256,8 @@ async fn forward_to_push_clients(
             if let Ok(ClientSessionResult::OutboundResponse(packet)) = res {
                 let _ = pc.tx_feed.try_send(Bytes::from(packet.bytes));
             }
-        } else {
-            // Buffer data until we are officially "published"
-            if is_video {
-                state.buffer_video(data.clone(), timestamp);
-            } else {
-                state.buffer_audio(data.clone(), timestamp);
-            }
+        } else if is_video {
+            state.buffer_video(data.clone(), timestamp);
         }
     }
 }

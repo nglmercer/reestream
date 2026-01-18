@@ -37,7 +37,7 @@ impl ClientStateWrapper {
         }
         self.prepublish_video_buffer.push_back((data, timestamp));
     }
-
+    #[allow(dead_code)]
     pub fn buffer_audio(&mut self, data: Bytes, timestamp: RtmpTimestamp) {
         if self.prepublish_audio_buffer.len() >= MAX_BUFFER_SIZE {
             self.prepublish_audio_buffer.pop_front();
@@ -196,26 +196,21 @@ impl PushClient {
                                     Self::send_packet(&tx_clone, res);
                                 }
                             }
-                            ClientSessionEvent::PublishRequestAccepted { .. } => {
+                            // FIXED: Removed redundant { .. }
+                            ClientSessionEvent::PublishRequestAccepted => {
                                 info!("Publish succeeded for remote RTMP");
                                 let _ = ready_tx.send(true);
                                 Self::drain_buffers(&mut state, &tx_clone);
                             }
-                            // --- CORRECCIÓN AQUÍ ---
-                            // Solo extraemos `code` ya que tu versión no tiene level/description
                             ClientSessionEvent::UnhandleableOnStatusCode { code } => {
                                 info!("RTMP Status received: {}", code);
-
-                                // Detectar palabras clave de error comunes en RTMP
-                                // BadName = StreamKey inválida o en uso
-                                // Failed = Error genérico
                                 if code.contains("BadName")
                                     || code.contains("error")
                                     || code.contains("Failed")
                                 {
                                     error!("Stopping stream due to RTMP status: {}", code);
                                     let _ = kill_tx.send(()).await;
-                                    return; // Salir del reader
+                                    return;
                                 }
                             }
                             ClientSessionEvent::ConnectionRequestRejected { description } => {
@@ -244,29 +239,31 @@ impl PushClient {
     }
 
     pub fn drain_buffers(state: &mut ClientStateWrapper, tx: &mpsc::Sender<Bytes>) {
-        if let Some(meta) = &state.prepublish_metadata {
-            if let Ok(res) = state.session.publish_metadata(meta) {
-                Self::send_packet(tx, res);
-            }
+        // FIXED: Collapsed nested if let
+        if let Some(meta) = &state.prepublish_metadata
+            && let Ok(res) = state.session.publish_metadata(meta)
+        {
+            Self::send_packet(tx, res);
         }
 
-        if let Some(header) = &state.video_sequence_header {
-            if let Ok(res) =
+        // FIXED: Collapsed nested if let
+        if let Some(header) = &state.video_sequence_header
+            && let Ok(res) =
                 state
                     .session
                     .publish_video_data(header.clone(), RtmpTimestamp::new(0), true)
-            {
-                Self::send_packet(tx, res);
-            }
+        {
+            Self::send_packet(tx, res);
         }
-        if let Some(header) = &state.audio_sequence_header {
-            if let Ok(res) =
+
+        // FIXED: Collapsed nested if let
+        if let Some(header) = &state.audio_sequence_header
+            && let Ok(res) =
                 state
                     .session
                     .publish_audio_data(header.clone(), RtmpTimestamp::new(0), true)
-            {
-                Self::send_packet(tx, res);
-            }
+        {
+            Self::send_packet(tx, res);
         }
 
         while let Some((data, ts)) = state.prepublish_video_buffer.pop_front() {
@@ -280,11 +277,10 @@ impl PushClient {
             }
         }
     }
+
     pub async fn shutdown(&self) {
         let mut state = self.client_state.write().await;
 
-        // Notify the server we are stopping.
-        // stop_publishing() typically sends FCUnpublish and deleteStream.
         info!(
             "Sending graceful shutdown (FCUnpublish/deleteStream) to {}",
             self.url
@@ -299,7 +295,6 @@ impl PushClient {
             Err(e) => error!("Error generating stop_publishing packets: {}", e),
         }
 
-        // Give the TCP writer a moment to actually send these bytes before we kill the connection
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 }
