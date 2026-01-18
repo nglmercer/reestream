@@ -1,292 +1,305 @@
-use std::collections::VecDeque;
-use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::Arc;
-
+// src/client/push.rs
+use crate::DynStream;
+use crate::client::perform_client_handshake;
 use bytes::Bytes;
 use rml_rtmp::sessions::{
     ClientSession, ClientSessionConfig, ClientSessionEvent, ClientSessionResult,
     PublishRequestType, StreamMetadata,
 };
 use rml_rtmp::time::RtmpTimestamp;
+use std::collections::VecDeque;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{RwLock, mpsc, watch};
+use tokio::task::JoinHandle;
 use tokio_native_tls::{TlsConnector, native_tls};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{error, info, trace};
 use url::Url;
 
-use crate::DynStream;
-use crate::client::perform_client_handshake;
-
-pub struct PushClient {
-    pub(crate) tx_feed: mpsc::Sender<Bytes>, // bounded to avoid unbounded memory growth
-    pub(crate) client_state: Arc<RwLock<ClientStateWrapper>>,
-    pub(crate) publish_ready_rx: watch::Receiver<bool>,
-}
+pub const MAX_BUFFER_SIZE: usize = 256;
 
 pub struct ClientStateWrapper {
     pub session: ClientSession,
-    pub target_stream: String,
-    pub prepublish_video_buffer: VecDeque<Bytes>,
-    pub prepublish_audio_buffer: VecDeque<Bytes>,
+    pub prepublish_video_buffer: VecDeque<(Bytes, RtmpTimestamp)>,
+    pub prepublish_audio_buffer: VecDeque<(Bytes, RtmpTimestamp)>,
     pub prepublish_metadata: Option<StreamMetadata>,
+    pub video_sequence_header: Option<Bytes>,
+    pub audio_sequence_header: Option<Bytes>,
+}
+
+impl ClientStateWrapper {
+    pub fn buffer_video(&mut self, data: Bytes, timestamp: RtmpTimestamp) {
+        if self.prepublish_video_buffer.len() >= MAX_BUFFER_SIZE {
+            self.prepublish_video_buffer.pop_front();
+        }
+        self.prepublish_video_buffer.push_back((data, timestamp));
+    }
+
+    pub fn buffer_audio(&mut self, data: Bytes, timestamp: RtmpTimestamp) {
+        if self.prepublish_audio_buffer.len() >= MAX_BUFFER_SIZE {
+            self.prepublish_audio_buffer.pop_front();
+        }
+        self.prepublish_audio_buffer.push_back((data, timestamp));
+    }
+
+    pub fn update_video_header(&mut self, data: Bytes) {
+        self.video_sequence_header = Some(data);
+    }
+
+    pub fn update_audio_header(&mut self, data: Bytes) {
+        self.audio_sequence_header = Some(data);
+    }
+}
+
+pub struct PushClient {
+    pub tx_feed: mpsc::Sender<Bytes>,
+    pub client_state: Arc<RwLock<ClientStateWrapper>>,
+    pub publish_ready_rx: watch::Receiver<bool>,
+    pub url: Url,
+    pub stream_key: String,
+    _tasks: Vec<JoinHandle<()>>,
+}
+
+impl Drop for PushClient {
+    fn drop(&mut self) {
+        for task in &self._tasks {
+            task.abort();
+        }
+        info!("PushClient dropped, background tasks aborted.");
+    }
 }
 
 impl PushClient {
+    fn send_packet(tx: &mpsc::Sender<Bytes>, result: ClientSessionResult) {
+        if let ClientSessionResult::OutboundResponse(packet) = result {
+            let _ = tx.try_send(Bytes::from(packet.bytes));
+        }
+    }
+
     pub async fn connect_and_publish(
         url: &Url,
         stream_key: String,
-    ) -> Result<PushClient, Box<dyn std::error::Error + Send + Sync>> {
-        let host = url
-            .host_str()
-            .ok_or_else(|| format!("URL sin host válido: {url}"))?
-            .to_string();
-
-        let port = if url.scheme() == "rtmps" {
-            443
-        } else {
-            url.port_or_known_default().unwrap_or(1935)
-        };
-
+        cached_video_header: Option<Bytes>,
+        cached_audio_header: Option<Bytes>,
+        cached_metadata: Option<StreamMetadata>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let host = url.host_str().ok_or("Invalid host")?.to_string();
+        let port = url.port_or_known_default().unwrap_or(1935);
         let addr = format!("{host}:{port}");
 
-        info!("Conectando push client a {addr}");
-
-        // Connect TCP
         let tcp_stream = TcpStream::connect(&addr).await?;
-        // reduce latency on TCP
-        if let Err(e) = tcp_stream.set_nodelay(true) {
-            warn!(
-                "No se pudo set_nodelay al tcp de push client {}: {}",
-                addr, e
-            );
-        }
+        let _ = tcp_stream.set_nodelay(true);
 
-        // Wrap TLS if needed
-        let mut boxed: DynStream = if url.scheme() == "rtmps" {
+        let mut stream: DynStream = if url.scheme() == "rtmps" {
             let native = native_tls::TlsConnector::builder()
                 .danger_accept_invalid_certs(true)
                 .build()?;
             let connector = TlsConnector::from(native);
-            let tls_stream = connector.connect(&host, tcp_stream).await?;
-            Box::new(tls_stream)
+            Box::new(connector.connect(&host, tcp_stream).await?)
         } else {
             Box::new(tcp_stream)
         };
 
-        perform_client_handshake(&mut boxed).await?;
-        info!("Handshake cliente completo hacia {}", addr);
+        perform_client_handshake(&mut stream).await?;
 
-        // split reader/writer
-        let (mut rd_half, mut wr_half) = tokio::io::split(boxed);
-
-        // client config with lower chunk size
         let mut client_cfg = ClientSessionConfig::new();
-        client_cfg.chunk_size = 128;
-        let path = url.path().trim_start_matches('/');
-        let app_segment = path.split('/').next().unwrap_or("");
-        let tcurl = if app_segment.is_empty() {
-            format!("rtmp://{}:{}/", host, port)
-        } else {
-            format!("rtmp://{}:{}/{}", host, port, app_segment)
-        };
-        client_cfg.tc_url = Some(tcurl.clone());
+        let app_segment = url
+            .path()
+            .trim_start_matches('/')
+            .split('/')
+            .next()
+            .unwrap_or("")
+            .to_string();
 
-        let (mut client_session, initial_results) = ClientSession::new(client_cfg)?;
+        client_cfg.tc_url = Some(format!("rtmp://{host}:{port}/{app_segment}"));
 
-        // bounded channel: capacity 256 to avoid unbounded growth when a remote is slow
+        let (mut session, initial_results) = ClientSession::new(client_cfg)?;
         let (tx, mut rx) = mpsc::channel::<Bytes>(256);
-        let writer_addr = addr.clone();
-        tokio::spawn(async move {
-            while let Some(bytes) = rx.recv().await {
-                if let Err(e) = wr_half.write_all(&bytes).await {
-                    error!("Error escribiendo a push target {}: {}", writer_addr, e);
-                    break;
-                }
-            }
-            info!("Writer task terminado para push target {}", writer_addr);
-        });
+        let (kill_tx, mut kill_rx) = mpsc::channel::<()>(1);
 
-        // send initial results (use try_send, drop if full)
-        for r in initial_results {
-            if let ClientSessionResult::OutboundResponse(packet) = r
-                && let Err(e) = tx.try_send(Bytes::from(packet.bytes.clone()))
-            {
-                debug!("Dropped initial packet for {}: {}", addr, e);
-            }
-        }
+        let (mut rd, mut wr) = tokio::io::split(stream);
 
-        // request connection (app extracted from URL)
-        let app = app_segment.to_string();
-        match client_session.request_connection(app.clone()) {
-            Ok(ClientSessionResult::OutboundResponse(packet)) => {
-                if let Err(e) = tx.try_send(Bytes::from(packet.bytes.clone())) {
-                    debug!("Dropped connect packet for {}: {}", addr, e);
-                }
-            }
-            Ok(_) => {}
-            Err(e) => {
-                return Err(format!("request_connection error: {:?}", e).into());
-            }
-        }
-
-        let client_state = ClientStateWrapper {
-            session: client_session,
-            target_stream: stream_key.clone(),
-            prepublish_video_buffer: VecDeque::new(),
-            prepublish_audio_buffer: VecDeque::new(),
-            prepublish_metadata: None,
-        };
-
-        let client_state = Arc::new(RwLock::new(client_state));
-        let (publish_ready_tx, publish_ready_rx) = watch::channel(false);
-
-        // reader task: advance client session based on remote responses
-        {
-            let client_state_reader = client_state.clone();
-            let tx_clone = tx.clone();
-            let addr_clone = addr.clone();
-            let publish_ready_tx = publish_ready_tx.clone();
-
-            tokio::spawn(async move {
-                let mut buf = [0u8; 8192];
-                loop {
-                    match rd_half.read(&mut buf).await {
-                        Ok(0) => {
-                            info!("Push target {} cerró la conexión (reader)", addr_clone);
-                            break;
-                        }
-                        Ok(n) => {
-                            let mut state = client_state_reader.write().await;
-
-                            // Protect handle_input from unwinding panics inside the library
-                            let res = catch_unwind(AssertUnwindSafe(|| {
-                                state.session.handle_input(&buf[..n])
-                            }));
-                            match res {
-                                Ok(Ok(results)) => {
-                                    for r in results {
-                                        match r {
-                                            ClientSessionResult::OutboundResponse(packet) => {
-                                                if let Err(e) = tx_clone
-                                                    .try_send(Bytes::from(packet.bytes.clone()))
-                                                {
-                                                    debug!(
-                                                        "Dropped outbound packet to {}: {}",
-                                                        addr_clone, e
-                                                    );
-                                                }
-                                            }
-                                            ClientSessionResult::RaisedEvent(ev) => {
-                                                trace!("Push client evento: {:?}", ev);
-                                                match ev {
-                                                    ClientSessionEvent::ConnectionRequestAccepted => {
-                                                        let stream_key = state.target_stream.clone();
-                                                        match state.session.request_publishing(stream_key, PublishRequestType::Live) {
-                                                            Ok(ClientSessionResult::OutboundResponse(pub_packet)) => {
-                                                                if let Err(e) = tx_clone.try_send(Bytes::from(pub_packet.bytes.clone())) {
-                                                                    debug!("Dropped publish request packet for {}: {}", addr_clone, e);
-                                                                }
-                                                            }
-                                                            Ok(_) => {}
-                                                            Err(e) => {
-                                                                error!("request_publishing fallo: {:?}", e);
-                                                            }
-                                                        }
-                                                    }
-                                                    ClientSessionEvent::PublishRequestAccepted => {
-                                                        info!("Push client publish accepted for {}", state.target_stream);
-                                                        // mark ready
-                                                        let _ = publish_ready_tx.send(true);
-
-                                                        // send buffered metadata if any
-                                                        if let Some(meta) = state.prepublish_metadata.take() {
-                                                            match state.session.publish_metadata(&meta) {
-                                                                Ok(ClientSessionResult::OutboundResponse(packet)) => {
-                                                                    if let Err(e) = tx_clone.try_send(Bytes::from(packet.bytes.clone())) {
-                                                                        debug!("Dropped buffered metadata packet for {}: {}", addr_clone, e);
-                                                                    }
-                                                                }
-                                                                Ok(_) => {}
-                                                                Err(e) => {
-                                                                    error!("Error sending buffered metadata: {:?}", e);
-                                                                }
-                                                            }
-                                                        }
-
-                                                        // drain buffered video
-                                                        while let Some(vframe) = state.prepublish_video_buffer.pop_front() {
-                                                            match state.session.publish_video_data(vframe.clone(), RtmpTimestamp::new(0), true) {
-                                                                Ok(ClientSessionResult::OutboundResponse(packet)) => {
-                                                                    if let Err(e) = tx_clone.try_send(Bytes::from(packet.bytes.clone())) {
-                                                                        debug!("Dropped buffered video packet for {}: {}", addr_clone, e);
-                                                                    }
-                                                                }
-                                                                Ok(_) => {}
-                                                                Err(e) => {
-                                                                    error!("Error sending buffered video frame: {:?}", e);
-                                                                    break;
-                                                                }
-                                                            }
-                                                        }
-
-                                                        // drain buffered audio
-                                                        while let Some(aframe) = state.prepublish_audio_buffer.pop_front() {
-                                                            match state.session.publish_audio_data(aframe.clone(), RtmpTimestamp::new(0), true) {
-                                                                Ok(ClientSessionResult::OutboundResponse(packet)) => {
-                                                                    if let Err(e) = tx_clone.try_send(Bytes::from(packet.bytes.clone())) {
-                                                                        debug!("Dropped buffered audio packet for {}: {}", addr_clone, e);
-                                                                    }
-                                                                }
-                                                                Ok(_) => {}
-                                                                Err(e) => {
-                                                                    error!("Error sending buffered audio frame: {:?}", e);
-                                                                    break;
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                    _ => {}
-                                                }
-                                            }
-                                            other => {
-                                                debug!("Push client other result: {:?}", other);
-                                            }
-                                        }
-                                    }
-                                }
-                                Ok(Err(e)) => {
-                                    error!(
-                                        "Error manejando input en ClientSession (push): {:?}",
-                                        e
-                                    );
-                                    break;
-                                }
-                                Err(panic_err) => {
-                                    error!(
-                                        "panic al procesar ClientSession::handle_input (push): {:?}",
-                                        panic_err
-                                    );
+        // Writer Task
+        let writer_handle = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = kill_rx.recv() => {
+                        break;
+                    }
+                    msg = rx.recv() => {
+                        match msg {
+                            Some(bytes) => {
+                                if wr.write_all(&bytes).await.is_err() {
                                     break;
                                 }
                             }
-
-                            drop(state);
-                        }
-                        Err(e) => {
-                            error!("Error leyendo desde push target {}: {}", addr_clone, e);
-                            break;
+                            None => break,
                         }
                     }
                 }
-                info!("Reader task terminado para push target {}", addr_clone);
-            });
+            }
+        });
+
+        for res in initial_results {
+            Self::send_packet(&tx, res);
         }
 
-        Ok(PushClient {
+        let res = session.request_connection(app_segment)?;
+        Self::send_packet(&tx, res);
+
+        let client_state = Arc::new(RwLock::new(ClientStateWrapper {
+            session,
+            prepublish_video_buffer: VecDeque::new(),
+            prepublish_audio_buffer: VecDeque::new(),
+            prepublish_metadata: cached_metadata,
+            video_sequence_header: cached_video_header,
+            audio_sequence_header: cached_audio_header,
+        }));
+
+        let (ready_tx, ready_rx) = watch::channel(false);
+        let state_clone = client_state.clone();
+        let tx_clone = tx.clone();
+        let stream_key_clone = stream_key.clone();
+
+        // Reader Task
+        let reader_handle = tokio::spawn(async move {
+            let mut buf = [0u8; 8192];
+            loop {
+                let n = match rd.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => n,
+                };
+
+                let mut state = state_clone.write().await;
+                let input_res =
+                    catch_unwind(AssertUnwindSafe(|| state.session.handle_input(&buf[..n])));
+
+                let results = match input_res {
+                    Ok(Ok(res)) => res,
+                    _ => break,
+                };
+
+                for res in results {
+                    match res {
+                        ClientSessionResult::OutboundResponse(packet) => {
+                            let _ = tx_clone.try_send(Bytes::from(packet.bytes));
+                        }
+                        ClientSessionResult::RaisedEvent(ev) => match ev {
+                            ClientSessionEvent::ConnectionRequestAccepted => {
+                                if let Ok(res) = state.session.request_publishing(
+                                    stream_key_clone.clone(),
+                                    PublishRequestType::Live,
+                                ) {
+                                    Self::send_packet(&tx_clone, res);
+                                }
+                            }
+                            ClientSessionEvent::PublishRequestAccepted { .. } => {
+                                info!("Publish succeeded for remote RTMP");
+                                let _ = ready_tx.send(true);
+                                Self::drain_buffers(&mut state, &tx_clone);
+                            }
+                            // --- CORRECCIÓN AQUÍ ---
+                            // Solo extraemos `code` ya que tu versión no tiene level/description
+                            ClientSessionEvent::UnhandleableOnStatusCode { code } => {
+                                info!("RTMP Status received: {}", code);
+
+                                // Detectar palabras clave de error comunes en RTMP
+                                // BadName = StreamKey inválida o en uso
+                                // Failed = Error genérico
+                                if code.contains("BadName")
+                                    || code.contains("error")
+                                    || code.contains("Failed")
+                                {
+                                    error!("Stopping stream due to RTMP status: {}", code);
+                                    let _ = kill_tx.send(()).await;
+                                    return; // Salir del reader
+                                }
+                            }
+                            ClientSessionEvent::ConnectionRequestRejected { description } => {
+                                error!("RTMP Connection Rejected: {}", description);
+                                let _ = kill_tx.send(()).await;
+                                return;
+                            }
+                            _ => trace!("Client Event: {:?}", ev),
+                        },
+                        ClientSessionResult::UnhandleableMessageReceived(_) => {}
+                    }
+                }
+            }
+            let _ = ready_tx.send(false);
+            let _ = kill_tx.send(()).await;
+        });
+
+        Ok(Self {
             tx_feed: tx,
             client_state,
-            publish_ready_rx,
+            publish_ready_rx: ready_rx,
+            url: url.clone(),
+            stream_key,
+            _tasks: vec![writer_handle, reader_handle],
         })
+    }
+
+    pub fn drain_buffers(state: &mut ClientStateWrapper, tx: &mpsc::Sender<Bytes>) {
+        if let Some(meta) = &state.prepublish_metadata {
+            if let Ok(res) = state.session.publish_metadata(meta) {
+                Self::send_packet(tx, res);
+            }
+        }
+
+        if let Some(header) = &state.video_sequence_header {
+            if let Ok(res) =
+                state
+                    .session
+                    .publish_video_data(header.clone(), RtmpTimestamp::new(0), true)
+            {
+                Self::send_packet(tx, res);
+            }
+        }
+        if let Some(header) = &state.audio_sequence_header {
+            if let Ok(res) =
+                state
+                    .session
+                    .publish_audio_data(header.clone(), RtmpTimestamp::new(0), true)
+            {
+                Self::send_packet(tx, res);
+            }
+        }
+
+        while let Some((data, ts)) = state.prepublish_video_buffer.pop_front() {
+            if let Ok(res) = state.session.publish_video_data(data, ts, true) {
+                Self::send_packet(tx, res);
+            }
+        }
+        while let Some((data, ts)) = state.prepublish_audio_buffer.pop_front() {
+            if let Ok(res) = state.session.publish_audio_data(data, ts, true) {
+                Self::send_packet(tx, res);
+            }
+        }
+    }
+    pub async fn shutdown(&self) {
+        let mut state = self.client_state.write().await;
+
+        // Notify the server we are stopping.
+        // stop_publishing() typically sends FCUnpublish and deleteStream.
+        info!(
+            "Sending graceful shutdown (FCUnpublish/deleteStream) to {}",
+            self.url
+        );
+
+        match state.session.stop_publishing() {
+            Ok(results) => {
+                for res in results {
+                    Self::send_packet(&self.tx_feed, res);
+                }
+            }
+            Err(e) => error!("Error generating stop_publishing packets: {}", e),
+        }
+
+        // Give the TCP writer a moment to actually send these bytes before we kill the connection
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
 }
