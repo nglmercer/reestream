@@ -1,15 +1,21 @@
 # Reestream Roadmap
 
-## Current Status (v0.2.0)
-- Workspace architecture with 3 crates
-- Basic RTMP relay server with multistream forwarding
+## Current Status (v0.3.0)
+- Workspace architecture with **5 crates** (core, ffmpeg, server, srt, root)
+- RTMP relay server with multistream forwarding
+- SRT protocol support (input listener, output sender, encryption)
 - TLS/RTMPS support with reconnection logic
 - Configuration via TOML with ConfigBuilder pattern
-- FFmpeg integration (binary resolver, command builder, process supervisor)
+- FFmpeg integration (binary resolver, command builder, process supervisor, **download**)
 - HLS segmenter with playlist generation
-- REST API with stream/platform management
-- HTTP server with axum (HLS serving, metrics, health check)
-- 196 tests passing, clippy clean
+- REST API with stream/platform management (**19 routes**)
+- HTTP server with axum (HLS serving, metrics, health check, FLV streaming)
+- Web UI dashboard (Vite 8 + Preact + TypeScript + Tailwind CSS 4)
+- Production hardening (graceful shutdown, rate limiting, connection pool, signal handlers)
+- Structured JSON logging
+- Webhook notifications
+- Concrete pipeline implementations (RTMP, SRT, File)
+- **263 tests passing**, clippy clean, cargo fmt clean
 
 ---
 
@@ -18,11 +24,14 @@
 ```toml
 [features]
 default = ["core"]
-core = []                          # RTMP relay + multistream
-hls = []                           # HLS/HTTP server
-api = ["serde_json"]               # REST API
-ffmpeg = []                        # FFmpeg process management
-all = ["hls", "api", "ffmpeg"]
+core = ["dep:reestream-core"]       # RTMP relay + multistream
+hls = ["dep:reestream-server", "reestream-server/hls"]  # HLS/HTTP server
+api = ["dep:reestream-server", "reestream-server/api"]  # REST API
+srt = ["dep:reestream-srt"]         # SRT protocol
+ffmpeg = ["dep:reestream-ffmpeg"]    # FFmpeg process management
+preview = ["hls"]                    # Stream preview alias
+webhook = ["dep:reestream-server", "reestream-server/api"]  # Webhook notifications
+all = ["hls", "api", "ffmpeg", "preview", "srt", "webhook"]
 ```
 
 ### Build targets
@@ -32,6 +41,9 @@ cargo build --release --no-default-features --features core
 
 # Core + HLS server
 cargo build --release --features core,hls
+
+# Core + SRT
+cargo build --release --features core,srt
 
 # Core + API
 cargo build --release --features core,api
@@ -43,7 +55,7 @@ cargo build --release --features all
 ---
 
 ## Phase 0: Architecture Refactor ✅ DONE
-- [x] Workspace restructure (reestream-core, reestream-ffmpeg, reestream-server)
+- [x] Workspace restructure (reestream-core, reestream-ffmpeg, reestream-server, reestream-srt)
 - [x] Cargo feature flags for optional components
 - [x] ConfigBuilder pattern for programmatic config
 - [x] StreamPipeline trait (input → process → output abstraction)
@@ -87,6 +99,7 @@ cargo build --release --features all
 - [x] FFmpeg binary resolver (platform → URL mapping)
 - [x] Binary cache in `~/.local/share/reestream/bin/`
 - [x] User-provided FFmpeg path override
+- [x] FFmpeg binary download with checksum verification
 - [x] FFmpeg command builder (passthrough, HLS, transcode, HW accel)
 - [x] Hardware acceleration flags (VAAPI, NVENC, VideoToolbox, MMAL)
 - [x] FFmpeg process wrapper with kill/stderr
@@ -102,7 +115,7 @@ cargo build --release --features all
 - [x] CORS headers for cross-origin playback
 - [x] Configurable segment storage path
 - [x] Serve HLS manifest at `/stream.m3u8`
-- [x] Serve segments at `/hls/:filename`
+- [x] Serve segments at `/hls/{filename}`
 
 ---
 
@@ -112,45 +125,61 @@ cargo build --release --features all
 - [x] `GET /api/status` — server health, uptime, version
 - [x] `GET /api/streams` — list active streams
 - [x] `POST /api/streams` — add stream
-- [x] `DELETE /api/streams/:id` — remove stream
+- [x] `DELETE /api/streams/{id}` — remove stream
+- [x] `GET /api/streams/{id}/stats` — stream statistics
+- [x] `GET /api/config` — get config
+- [x] `PUT /api/config` — update config
+- [x] `POST /api/config/reload` — trigger config reload
 - [x] `GET /api/platforms` — list platforms
 - [x] `POST /api/platforms` — add platform
-- [x] `DELETE /api/platforms/:id` — remove platform
-- [x] `PUT /api/platforms/:id/toggle` — toggle platform
+- [x] `DELETE /api/platforms/{id}` — remove platform
+- [x] `PUT /api/platforms/{id}/toggle` — toggle platform
+- [x] `GET /stream.m3u8` — HLS playlist
+- [x] `GET /hls/{filename}` — HLS segments
+- [x] `GET /stream.flv` — FLV live stream
 - [x] `GET /metrics` — Prometheus-format metrics
+- [x] `GET /` — Web UI dashboard
 
 ---
 
-## Phase 7: SRT Protocol (TODO)
-- [ ] SRT input listener (feature-gated: `srt`)
-- [ ] SRT output push (multistream to SRT destinations)
-- [ ] SRT latency and congestion control config
-- [ ] SRT passphrase encryption
-- [ ] Bridge: SRT input → RTMP relay → HLS output
+## Phase 7: SRT Protocol ✅ DONE
+- [x] SRT input listener (feature-gated: `srt`)
+- [x] SRT output push (multistream to SRT destinations)
+- [x] SRT latency and congestion control config
+- [x] SRT passphrase encryption (AES-128)
+- [x] SRT configuration validation
+- [ ] Bridge: SRT input → RTMP relay → HLS output (runtime wiring)
 
 ---
 
-## Phase 8: Web UI (TODO)
-- [ ] UI build strategy (embed pre-built or download)
-- [ ] Dashboard — stream status, viewer count, uptime
+## Phase 8: Web UI ✅ DONE
+- [x] UI build strategy (Vite 8 + Preact + TypeScript, compiled to static assets)
+- [x] Tailwind CSS 4 styling
+- [x] Dashboard — stream status, viewer count, uptime
+- [x] Platform management (list, toggle enabled/disabled)
+- [x] Log viewer (real-time in-browser logs)
+- [x] Auto-refresh polling (5s status, 10s streams, 15s platforms)
+- [x] Embedded via `rust-embed` (compiled into binary)
 - [ ] Stream setup wizard
-- [ ] Platform management (add/remove/edit destinations)
 - [ ] Stream preview player (HLS.js or flv.js)
-- [ ] Log viewer (real-time streaming logs)
 - [ ] i18n support
 
 ---
 
-## Phase 9: Stream Processing Pipeline (TODO)
-- [ ] Input sources: RTMP, SRT, File, RTSP, USB
-- [ ] Processing: passthrough, transcode, resize, watermark
-- [ ] Output: RTMP, SRT, HLS, FLV, File recording
-- [ ] FLV container support (`/stream.flv` endpoint)
+## Phase 9: Stream Processing Pipeline ✅ DONE
+- [x] Input sources: RTMP, SRT, File
+- [x] Concrete pipeline implementations (`RtmpPipeline`, `SrtPipeline`, `FilePipeline`)
+- [x] `DefaultPipelineManager` with auto-detection of input type
+- [x] Pipeline status/stats lifecycle
+- [x] FLV container support (`/stream.flv` endpoint)
+- [x] Output: RTMP, HLS, FLV
+- [ ] Processing: transcode, resize, watermark
 - [ ] Thumbnail/preview generation
+- [ ] Input sources: RTSP, USB
 
 ---
 
-## Phase 10: Monitoring & Observability ✅ DONE (partial)
+## Phase 10: Monitoring & Observability ✅ DONE
 - [x] Health check endpoint (`GET /health`)
 - [x] Metrics endpoint (`GET /metrics`, Prometheus format)
 - [x] `reestream_uptime_seconds`
@@ -158,8 +187,11 @@ cargo build --release --features all
 - [x] `reestream_viewers_total`
 - [x] `reestream_stream_status` per stream
 - [x] `reestream_stream_bitrate_kbps` per stream
-- [ ] Structured logging (JSON output option)
-- [ ] Webhook notifications (stream start/end/disconnect)
+- [x] Structured logging (JSON output option via `--json-log`)
+- [x] Configurable log level (`--log-level`)
+- [x] Webhook notifications (stream start/end/error, viewer connect/disconnect)
+- [x] Webhook secret header authentication
+- [x] Webhook configurable timeout
 
 ---
 
@@ -175,15 +207,15 @@ cargo build --release --features all
 
 ---
 
-## Phase 12: Production Hardening (TODO)
-- [ ] Graceful shutdown (drain in-flight packets)
-- [ ] Rate limiting per connection
-- [ ] Connection pool management
-- [ ] Max viewer limit per stream
-- [ ] Bandwidth limiting per stream
+## Phase 12: Production Hardening ✅ DONE
+- [x] Graceful shutdown (drain in-flight packets with configurable timeout)
+- [x] Rate limiting per connection (per-second connection rate limiter)
+- [x] Connection pool management (max concurrent connections with RAII guard)
+- [x] Max viewer limit per stream
+- [x] Bandwidth limiting per stream
+- [x] Config file watcher (hot-reload on change detection)
+- [x] Signal handlers (SIGTERM=shutdown, SIGINT=shutdown, SIGHUP=reload)
 - [ ] Let's Encrypt auto-TLS (ACME)
-- [ ] Config file watcher (hot-reload on change)
-- [ ] Signal handlers (SIGHUP=reload, SIGTERM=shutdown)
 - [ ] Fuzz testing for RTMP packet parsing
 - [ ] Stress tests with 100+ concurrent streams
 
@@ -194,19 +226,21 @@ cargo build --release --features all
 | Feature | restreamer | reestream |
 |---|---|---|
 | RTMP/S ingest | ✅ | ✅ |
-| SRT ingest/output | ✅ | TODO Phase 7 |
+| SRT ingest/output | ✅ | ✅ |
 | HLS HTTP server | ✅ | ✅ |
-| HTTP-FLV streaming | ❌ | TODO Phase 9 |
+| HTTP-FLV streaming | ❌ | ✅ |
 | FFmpeg transcoding | ✅ | ✅ |
 | HW accel (CUDA/VAAPI) | ✅ | ✅ |
-| Web UI | ✅ | TODO Phase 8 |
+| Web UI | ✅ | ✅ |
 | REST API | ✅ | ✅ |
 | Viewer monitoring | ✅ | ✅ |
 | Health check | ✅ | ✅ |
 | Prometheus metrics | ✅ | ✅ |
 | Docker multi-arch | ✅ | ✅ (Linux) |
 | Stream recording | ❌ | TODO Phase 9 |
-| Webhooks | ❌ | TODO Phase 10 |
+| Webhooks | ❌ | ✅ |
+| Structured logging | ✅ | ✅ |
+| Graceful shutdown | ✅ | ✅ |
 
 ---
 
@@ -216,6 +250,9 @@ cargo build --release --features all
 # Run all tests
 cargo test --workspace
 
+# Run with all features
+cargo test --workspace --all-features
+
 # Run with output
 cargo test --workspace -- --nocapture
 
@@ -223,9 +260,13 @@ cargo test --workspace -- --nocapture
 cargo test -p reestream-core
 cargo test -p reestream-ffmpeg
 cargo test -p reestream-server
+cargo test -p reestream-srt
 
-# Run clippy
-cargo clippy --workspace --all-targets
+# Run clippy (all features)
+cargo clippy --workspace --all-targets --all-features
+
+# Check formatting
+cargo fmt --all -- --check
 
 # Run with coverage
 cargo tarpaulin --workspace --out Html
@@ -235,6 +276,9 @@ cargo build --release --no-default-features --features core
 
 # Build with everything
 cargo build --release --features all
+
+# Build dashboard
+cd dashboard && bun run build
 ```
 
 ---
@@ -243,9 +287,28 @@ cargo build --release --features all
 
 | Module | Tests |
 |--------|-------|
-| reestream-core | 99 |
+| reestream-core | 123 |
 | reestream-ffmpeg | 23 |
-| reestream-server | 9 |
-| reestream (root) | 34 |
+| reestream-server | 44 |
+| reestream-srt | 23 |
+| reestream (root) | 19 |
 | integration tests | 31 |
-| **Total** | **196** |
+| **Total** | **263** |
+
+---
+
+## Crate Architecture
+
+```
+reestream/                          # Root binary crate
+├── crates/
+│   ├── reestream-core/             # RTMP relay, config, pipeline traits, hardening
+│   ├── reestream-ffmpeg/           # FFmpeg binary resolver, command builder, supervisor
+│   ├── reestream-server/           # HTTP server, HLS, REST API, webhooks, dashboard
+│   └── reestream-srt/              # SRT listener, sender, config
+└── dashboard/                      # Vite 8 + Preact + TypeScript + Tailwind
+    └── src/
+        ├── api/                    # Type-safe API client
+        ├── hooks/                  # usePolling hook
+        └── components/             # Header, StatsCards, StreamsTable, PlatformsTable, LogViewer
+```

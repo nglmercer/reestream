@@ -12,7 +12,7 @@ use tracing::info;
 
 use crate::dashboard;
 use crate::flv::{self, FlvState};
-use crate::hls::{HlsConfig, HlsSegmenter, Segment};
+use crate::hls::HlsSegmenter;
 use crate::stream::{StreamManager, StreamStatus};
 
 #[derive(Clone)]
@@ -91,6 +91,7 @@ struct AddStreamRequest {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct UpdateConfigRequest {
     stream_key: Option<String>,
 }
@@ -311,15 +312,15 @@ pub fn create_router(state: AppState) -> Router {
         .route("/favicon.svg", get(dashboard::serve_asset))
         .route("/api/status", get(status))
         .route("/api/streams", get(list_streams).post(add_stream))
-        .route("/api/streams/:id", delete(remove_stream))
-        .route("/api/streams/:id/stats", get(stream_stats))
+        .route("/api/streams/{id}", delete(remove_stream))
+        .route("/api/streams/{id}/stats", get(stream_stats))
         .route("/api/config", get(get_config).put(update_config))
         .route("/api/config/reload", post(reload_config))
         .route("/api/platforms", get(list_platforms).post(add_platform))
-        .route("/api/platforms/:id", delete(remove_platform))
-        .route("/api/platforms/:id/toggle", put(toggle_platform))
+        .route("/api/platforms/{id}", delete(remove_platform))
+        .route("/api/platforms/{id}/toggle", put(toggle_platform))
         .route("/stream.m3u8", get(hls_playlist))
-        .route("/hls/:filename", get(hls_segment))
+        .route("/hls/{filename}", get(hls_segment))
         .route("/stream.flv", get(flv_stream))
         .route("/metrics", get(metrics))
         .layer(CorsLayer::permissive())

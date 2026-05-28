@@ -177,8 +177,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_trim_old_segments() {
-        let mut config = HlsConfig::default();
-        config.max_segments = 3;
+        let config = HlsConfig {
+            max_segments: 3,
+            ..Default::default()
+        };
         let segmenter = HlsSegmenter::new(config);
 
         for i in 0..5 {
