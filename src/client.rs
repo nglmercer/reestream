@@ -27,6 +27,80 @@ fn is_audio_sequence_header(data: &Bytes) -> bool {
     data.len() > 1 && (data[0] & 0xF0) == 0xA0 && data[1] == 0x00
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_video_sequence_header_valid() {
+        let data = Bytes::from(vec![0x17, 0x00, 0x00, 0x00]);
+        assert!(is_video_sequence_header(&data));
+    }
+
+    #[test]
+    fn test_is_video_sequence_header_empty() {
+        let data = Bytes::new();
+        assert!(!is_video_sequence_header(&data));
+    }
+
+    #[test]
+    fn test_is_video_sequence_header_single_byte() {
+        let data = Bytes::from(vec![0x17]);
+        assert!(!is_video_sequence_header(&data));
+    }
+
+    #[test]
+    fn test_is_video_sequence_header_wrong_type() {
+        let data = Bytes::from(vec![0x27, 0x00]);
+        assert!(!is_video_sequence_header(&data));
+    }
+
+    #[test]
+    fn test_is_video_sequence_header_wrong_flag() {
+        let data = Bytes::from(vec![0x17, 0x01]);
+        assert!(!is_video_sequence_header(&data));
+    }
+
+    #[test]
+    fn test_is_audio_sequence_header_valid_aac() {
+        let data = Bytes::from(vec![0xAF, 0x00, 0x01]);
+        assert!(is_audio_sequence_header(&data));
+    }
+
+    #[test]
+    fn test_is_audio_sequence_header_valid_other_codec() {
+        // 0xA0 = audio flag with codec id 0
+        let data = Bytes::from(vec![0xA0, 0x00]);
+        assert!(is_audio_sequence_header(&data));
+    }
+
+    #[test]
+    fn test_is_audio_sequence_header_empty() {
+        let data = Bytes::new();
+        assert!(!is_audio_sequence_header(&data));
+    }
+
+    #[test]
+    fn test_is_audio_sequence_header_single_byte() {
+        let data = Bytes::from(vec![0xAF]);
+        assert!(!is_audio_sequence_header(&data));
+    }
+
+    #[test]
+    fn test_is_audio_sequence_header_not_audio() {
+        // 0x17 is video, not audio
+        let data = Bytes::from(vec![0x17, 0x00]);
+        assert!(!is_audio_sequence_header(&data));
+    }
+
+    #[test]
+    fn test_is_audio_sequence_header_wrong_flag() {
+        // second byte != 0x00
+        let data = Bytes::from(vec![0xAF, 0x01]);
+        assert!(!is_audio_sequence_header(&data));
+    }
+}
+
 pub(crate) async fn perform_client_handshake(
     stream: &mut DynStream,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {

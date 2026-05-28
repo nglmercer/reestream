@@ -44,3 +44,66 @@ impl From<tokio_native_tls::native_tls::Error> for RelayError {
 
 #[allow(dead_code)]
 pub type Result<T> = std::result::Result<T, RelayError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_display_io() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "refused");
+        let err = RelayError::Io(io_err);
+        assert!(err.to_string().contains("IO error"));
+        assert!(err.to_string().contains("refused"));
+    }
+
+    #[test]
+    fn test_display_handshake() {
+        let err = RelayError::Handshake("bad handshake".into());
+        assert_eq!(err.to_string(), "Handshake error: bad handshake");
+    }
+
+    #[test]
+    fn test_display_session() {
+        let err = RelayError::Session("session expired".into());
+        assert_eq!(err.to_string(), "Session error: session expired");
+    }
+
+    #[test]
+    fn test_display_connection() {
+        let err = RelayError::Connection("timeout".into());
+        assert_eq!(err.to_string(), "Connection error: timeout");
+    }
+
+    #[test]
+    fn test_display_timeout() {
+        let err = RelayError::Timeout("30s".into());
+        assert_eq!(err.to_string(), "Timeout: 30s");
+    }
+
+    #[test]
+    fn test_display_invalid_config() {
+        let err = RelayError::InvalidConfig("missing field".into());
+        assert_eq!(err.to_string(), "Invalid config: missing field");
+    }
+
+    #[test]
+    fn test_display_publish_rejected() {
+        let err = RelayError::PublishRejected("bad key".into());
+        assert_eq!(err.to_string(), "Publish rejected: bad key");
+    }
+
+    #[test]
+    fn test_from_io_error() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file missing");
+        let err: RelayError = io_err.into();
+        assert!(matches!(err, RelayError::Io(_)));
+    }
+
+    #[test]
+    fn test_error_trait_implemented() {
+        let err: Box<dyn std::error::Error> =
+            Box::new(RelayError::Handshake("test".into()));
+        assert_eq!(err.to_string(), "Handshake error: test");
+    }
+}

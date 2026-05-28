@@ -980,6 +980,7 @@ dependencies = [
  "reqwest",
  "rml_rtmp",
  "serde",
+ "serde_json",
  "tokio",
  "tokio-native-tls",
  "toml",
