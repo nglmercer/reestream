@@ -6,6 +6,7 @@ pub mod pipeline;
 pub mod pipeline_impl;
 pub mod provider;
 pub mod server;
+pub mod setup;
 
 use tokio::io::{AsyncRead, AsyncWrite};
 

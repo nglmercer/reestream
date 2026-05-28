@@ -1,4 +1,4 @@
-import { useCallback } from 'preact/hooks';
+import { useCallback, useState, useEffect } from 'preact/hooks';
 import { api } from './api';
 import type { ServerStatus, StreamInfo, Platform } from './api';
 import { usePolling } from './hooks';
@@ -9,6 +9,8 @@ import { VideoPreview } from './components/VideoPreview';
 import { StreamsTable } from './components/StreamsTable';
 import { PlatformsTable } from './components/PlatformsTable';
 import { LogViewer } from './components/LogViewer';
+import { SetupWizard } from './components/SetupWizard';
+import { SettingsPanel } from './components/SettingsPanel';
 
 const STATUS_POLL = 5_000;
 const STREAMS_POLL = 10_000;
@@ -16,6 +18,18 @@ const PLATFORMS_POLL = 15_000;
 
 export function App() {
   const { logs, addLog, clearLogs } = useLogger();
+  const [needsSetup, setNeedsSetup] = useState<boolean | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/setup/status')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.success) setNeedsSetup(d.data.first_run);
+        else setNeedsSetup(false);
+      })
+      .catch(() => setNeedsSetup(false));
+  }, []);
 
   const fetchStatus = useCallback(async (): Promise<ServerStatus> => {
     const res = await api.getStatus();
@@ -56,6 +70,20 @@ export function App() {
   if (streams.error) addLog(`Streams error: ${streams.error}`, 'error');
   if (platforms.error) addLog(`Platforms error: ${platforms.error}`, 'error');
 
+  // Show setup wizard on first run
+  if (needsSetup === true) {
+    return <SetupWizard />;
+  }
+
+  // Loading state
+  if (needsSetup === null) {
+    return (
+      <div class="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div class="text-slate-500 animate-pulse">Loading…</div>
+      </div>
+    );
+  }
+
   const streamNames = (streams.data ?? []).map((s) => ({
     id: s.id,
     name: s.name,
@@ -64,7 +92,10 @@ export function App() {
 
   return (
     <div class="min-h-screen bg-slate-950">
-      <Header version={status.data?.version ?? '…'} />
+      <Header
+        version={status.data?.version ?? '…'}
+        onSettings={() => setShowSettings(true)}
+      />
       <main class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
         <StatsCards status={status.data} loading={status.loading} />
         <VideoPreview streams={streamNames} />
@@ -81,6 +112,10 @@ export function App() {
         />
         <LogViewer logs={logs} onClear={clearLogs} />
       </main>
+
+      {showSettings && (
+        <SettingsPanel onClose={() => setShowSettings(false)} addLog={addLog} />
+      )}
     </div>
   );
 }

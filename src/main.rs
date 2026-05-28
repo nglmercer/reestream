@@ -23,11 +23,41 @@ struct Args {
     /// Log level (trace, debug, info, warn, error)
     #[clap(long, default_value = "info")]
     log_level: String,
+
+    /// Run interactive first-time setup wizard
+    #[clap(long)]
+    setup: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+
+    if args.setup {
+        return run_setup(&args.config);
+    }
+
+    if reestream::setup::is_first_run(&args.config) {
+        eprintln!("No config file found at '{}'.", args.config.display());
+        eprintln!(
+            "Run with --setup to create one, or open http://localhost:8080 for the web setup."
+        );
+        eprintln!();
+        eprintln!("  reestream --setup");
+        eprintln!();
+
+        // Create minimal config so the server can start and serve the dashboard
+        let default_config = reestream::config::ConfigBuilder::new()
+            .stream_key("")
+            .build();
+        let toml = default_config.to_toml()?;
+        std::fs::write(&args.config, toml)?;
+        eprintln!(
+            "Created minimal config at '{}' — starting server for web setup.",
+            args.config.display()
+        );
+        eprintln!();
+    }
 
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&args.log_level));
@@ -100,6 +130,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             hls_segmenter: Arc::new(reestream::http_server::hls::HlsSegmenter::new(hls_config)),
             flv_state: reestream::http_server::flv::FlvState::default(),
             start_time: std::time::Instant::now(),
+            config_path: args.config.clone(),
         };
         tokio::spawn(async move {
             if let Err(e) =
@@ -109,6 +140,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
         info!("HTTP server starting on 0.0.0.0:8080");
+    }
+
+    if !stream_key.is_empty() {
+        info!("Open http://localhost:8080 for the dashboard");
+    } else {
+        warn!("No stream key configured — open http://localhost:8080/setup to complete setup");
     }
 
     loop {
@@ -169,6 +206,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn run_setup(config_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    reestream::setup::run_cli_wizard(config_path)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,6 +245,13 @@ mod tests {
         assert_eq!(args.config, PathBuf::from("config.toml"));
         assert!(!args.json_log);
         assert_eq!(args.log_level, "info");
+        assert!(!args.setup);
+    }
+
+    #[test]
+    fn test_args_setup_flag() {
+        let args = Args::try_parse_from(["reestream", "--setup"]).unwrap();
+        assert!(args.setup);
     }
 
     #[test]

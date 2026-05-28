@@ -21,6 +21,7 @@ pub struct AppState {
     pub hls_segmenter: Arc<HlsSegmenter>,
     pub flv_state: FlvState,
     pub start_time: std::time::Instant,
+    pub config_path: std::path::PathBuf,
 }
 
 #[derive(Serialize)]
@@ -186,6 +187,86 @@ async fn reload_config() -> impl IntoResponse {
     axum::Json(ApiResponse::ok("config reload triggered"))
 }
 
+async fn setup_status(State(state): State<AppState>) -> impl IntoResponse {
+    let status = reestream_core::setup::get_setup_status(&state.config_path);
+    axum::Json(ApiResponse::ok(status))
+}
+
+async fn setup_save(
+    State(state): State<AppState>,
+    axum::Json(req): axum::Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let setup_req: reestream_core::setup::SetupRequest = match serde_json::from_value(req) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::Json(ApiResponse::<()>::err(format!("Invalid request: {e}"))),
+            )
+                .into_response();
+        }
+    };
+
+    match reestream_core::setup::apply_setup(&state.config_path, &setup_req) {
+        Ok(config) => {
+            info!("Configuration saved via setup wizard");
+            (
+                StatusCode::OK,
+                axum::Json(ApiResponse::ok(format!(
+                    "Config saved with {} platforms",
+                    config.platform.as_ref().map_or(0, |p| p.len())
+                ))),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            axum::Json(ApiResponse::<()>::err(format!("Setup failed: {e}"))),
+        )
+            .into_response(),
+    }
+}
+
+async fn server_info(State(state): State<AppState>) -> impl IntoResponse {
+    match reestream_core::setup::get_server_info(&state.config_path) {
+        Ok(info) => axum::Json(ApiResponse::ok(info)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(ApiResponse::<()>::err(format!(
+                "Failed to get server info: {e}"
+            ))),
+        )
+            .into_response(),
+    }
+}
+
+async fn reveal_stream_key(State(state): State<AppState>) -> impl IntoResponse {
+    match reestream_core::setup::get_stream_key(&state.config_path) {
+        Ok(key) => axum::Json(ApiResponse::ok(key)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(ApiResponse::<()>::err(format!(
+                "Failed to get stream key: {e}"
+            ))),
+        )
+            .into_response(),
+    }
+}
+
+async fn reset_stream_key(State(state): State<AppState>) -> impl IntoResponse {
+    match reestream_core::setup::reset_stream_key(&state.config_path) {
+        Ok(new_key) => {
+            info!("Stream key reset via API");
+            axum::Json(ApiResponse::ok(new_key)).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(ApiResponse::<()>::err(format!("Failed to reset key: {e}"))),
+        )
+            .into_response(),
+    }
+}
+
 async fn list_platforms(State(state): State<AppState>) -> impl IntoResponse {
     let platforms = state.stream_manager.get_platforms().await;
     axum::Json(ApiResponse::ok(platforms))
@@ -316,6 +397,13 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/streams/{id}/stats", get(stream_stats))
         .route("/api/config", get(get_config).put(update_config))
         .route("/api/config/reload", post(reload_config))
+        .route("/api/setup/status", get(setup_status))
+        .route("/api/setup/save", post(setup_save))
+        .route("/api/setup/info", get(server_info))
+        .route(
+            "/api/setup/key",
+            get(reveal_stream_key).post(reset_stream_key),
+        )
         .route("/api/platforms", get(list_platforms).post(add_platform))
         .route("/api/platforms/{id}", delete(remove_platform))
         .route("/api/platforms/{id}/toggle", put(toggle_platform))
@@ -351,6 +439,7 @@ mod tests {
             hls_segmenter: Arc::new(HlsSegmenter::new(hls_config)),
             flv_state: FlvState::default(),
             start_time: std::time::Instant::now(),
+            config_path: std::path::PathBuf::from("/tmp/test_config.toml"),
         }
     }
 
