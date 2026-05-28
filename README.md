@@ -5,12 +5,17 @@ RTMP/SRT multistream relay server with HLS, HTTP-FLV, FFmpeg transcoding, REST A
 ## Features
 
 - **RTMP relay** — receive one stream, forward to multiple platforms simultaneously
-- **SRT protocol** — low-latency input/output with encryption support
+- **SRT protocol** — low-latency input/output with AES-128 encryption
 - **HLS server** — live `.m3u8` playlist and `.ts` segment serving
 - **HTTP-FLV** — zero-copy FLV live streaming at `/stream.flv`
-- **FFmpeg integration** — binary resolver, command builder, process supervisor, hardware acceleration
-- **REST API** — 19 endpoints for stream/platform/config management
-- **Web dashboard** — Vite 8 + Preact + TypeScript + Tailwind CSS 4 with live video preview
+- **FFmpeg integration** — binary resolver, command builder, supervisor, download, hardware acceleration
+- **REST API** — 25 endpoints for stream/platform/config/setup/recording management
+- **Web dashboard** — Vite 8 + Preact + TypeScript + Tailwind CSS 4
+- **Video preview** — FLV/HLS player with latency monitor (flv.js)
+- **First-time setup** — CLI `--setup` wizard + dashboard web wizard
+- **Settings panel** — stream key reveal/reset, server endpoints, OBS setup guide
+- **Platform management** — add/remove with presets (Twitch, YouTube, Facebook, Instagram, Kick, TikTok)
+- **Stream recording** — FFmpeg-based recording to MP4/FLV/MKV/TS
 - **Prometheus metrics** — uptime, streams, viewers, per-stream status and bitrate
 - **Webhooks** — notifications for stream start/end/error, viewer connect/disconnect
 - **Production hardening** — graceful shutdown, rate limiting, connection pool, signal handlers, config watcher
@@ -52,6 +57,19 @@ Options:
   -c, --config <PATH>      Config file path [default: config.toml]
       --json-log           Enable JSON structured logging
       --log-level <LEVEL>  Log level: trace, debug, info, warn, error [default: info]
+      --setup              Run interactive first-time setup wizard
+```
+
+### First Run
+
+```bash
+# Option 1: CLI wizard
+reestream --setup
+
+# Option 2: Auto-detect → start server → open browser
+reestream
+# Shows: "No config file found. Run with --setup or open http://localhost:8080"
+# Opens dashboard setup wizard automatically
 ```
 
 ## Configuration
@@ -141,6 +159,25 @@ When running with `--features all`, three services start:
 | `GET` | `/api/config` | Get current config |
 | `PUT` | `/api/config` | Update config |
 | `POST` | `/api/config/reload` | Trigger hot-reload |
+
+### Setup (First Run)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/setup/status` | First-run detection |
+| `POST` | `/api/setup/save` | Save config from wizard |
+| `GET` | `/api/setup/info` | Server endpoints, hostname, ports |
+| `GET` | `/api/setup/key` | Reveal stream key |
+| `POST` | `/api/setup/key` | Reset stream key (generates new UUID) |
+
+### Recordings
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/recordings` | List all recordings |
+| `POST` | `/api/recordings/start` | Start recording `{stream_id, input_url}` |
+| `POST` | `/api/recordings/{id}/stop` | Stop recording |
+| `DELETE` | `/api/recordings/{id}` | Delete recording + file |
 
 ### Streaming
 
