@@ -1,6 +1,7 @@
 pub mod client;
 pub mod config;
 pub mod error;
+pub mod hardening;
 pub mod pipeline;
 pub mod provider;
 pub mod server;

@@ -6,3 +6,6 @@ pub use reestream_ffmpeg as ffmpeg;
 
 #[cfg(any(feature = "hls", feature = "api"))]
 pub use reestream_server as server;
+
+#[cfg(feature = "srt")]
+pub use reestream_srt as srt;

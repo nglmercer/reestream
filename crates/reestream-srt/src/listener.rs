@@ -1,8 +1,8 @@
 use bytes::Bytes;
 use futures::prelude::*;
-use srt_tokio::{SrtListener as SrtTokioListener, SrtSocket};
-use std::net::SocketAddr;
-use tokio::sync::{broadcast, mpsc};
+use srt_tokio::SrtSocket;
+use std::time::{Duration, Instant};
+use tokio::sync::broadcast;
 use tracing::{error, info, warn};
 
 use crate::config::SrtConfig;
@@ -26,66 +26,40 @@ impl SrtListener {
     pub async fn run(&self) -> Result<(), SrtError> {
         self.config.validate()?;
 
-        let addr: SocketAddr = format!("{}:{}", self.config.listen_addr, self.config.listen_port)
-            .parse()
-            .map_err(|e| SrtError::InvalidConfig(format!("Invalid address: {e}")))?;
+        let bind_addr = format!("{}:{}", self.config.listen_addr, self.config.listen_port);
+        info!("SRT listener starting on {}", bind_addr);
 
-        info!("SRT listener starting on {}", addr);
+        let mut builder = SrtSocket::builder()
+            .latency(Duration::from_millis(self.config.latency_ms as u64));
 
-        let listener = SrtTokioListener::builder()
-            .set(|options| {
-                options.latency = std::time::Duration::from_millis(self.config.latency_ms as u64);
-                if self.config.max_bandwidth > 0 {
-                    options.max_bandwidth = self.config.max_bandwidth;
-                }
-                if let Some(ref pass) = self.config.passphrase {
-                    options.encryption = srt_tokio::options::Encryption::Aes128 {
-                        passphrase: pass.clone().into(),
-                    };
-                }
-            })
-            .bind(addr)
+        if let Some(ref pass) = self.config.passphrase {
+            let key_len = self.config.pbkey_len.unwrap_or(16) as u16;
+            builder = builder.encryption(key_len, pass.clone());
+        }
+
+        let mut socket = builder
+            .listen_on(bind_addr.as_str())
             .await
             .map_err(|e| SrtError::BindFailed(format!("{e}")))?;
 
-        info!("SRT listener bound on {}", addr);
+        info!("SRT listener bound on {}", bind_addr);
 
-        let mut incoming = listener.incoming();
+        let data_tx = self.data_tx.clone();
 
-        while let Some(result) = incoming.next().await {
-            let (sender, _req) = result.map_err(|e| SrtError::ConnectionFailed(format!("{e}")))?;
-
-            let data_tx = self.data_tx.clone();
-            tokio::spawn(async move {
-                if let Err(e) = Self::handle_connection(sender, data_tx).await {
-                    warn!("SRT connection error: {}", e);
-                }
-            });
-        }
-
-        Ok(())
-    }
-
-    async fn handle_connection(
-        mut sender: SrtSocket,
-        data_tx: broadcast::Sender<Bytes>,
-    ) -> Result<(), SrtError> {
-        loop {
-            match sender.next().await {
-                Some(Ok((Instant, bytes))) => {
+        while let Some(result) = socket.next().await {
+            match result {
+                Ok((_instant, bytes)) => {
                     let data = Bytes::from(bytes.to_vec());
                     let _ = data_tx.send(data);
                 }
-                Some(Err(e)) => {
+                Err(e) => {
                     warn!("SRT receive error: {}", e);
-                    return Err(SrtError::ReceiveFailed(format!("{e}")));
-                }
-                None => {
-                    info!("SRT connection closed");
-                    return Ok(());
                 }
             }
         }
+
+        info!("SRT listener stopped");
+        Ok(())
     }
 }
 

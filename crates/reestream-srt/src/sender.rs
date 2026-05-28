@@ -1,7 +1,8 @@
 use bytes::Bytes;
+use futures::prelude::*;
 use srt_tokio::SrtSocket;
-use std::net::SocketAddr;
-use tracing::{info, warn};
+use std::time::{Duration, Instant};
+use tracing::info;
 use url::Url;
 
 use crate::error::SrtError;
@@ -29,23 +30,19 @@ impl SrtSender {
             .host_str()
             .ok_or_else(|| SrtError::InvalidConfig("No host in SRT URL".into()))?;
         let port = self.url.port().unwrap_or(3000);
-        let addr: SocketAddr = format!("{host}:{port}")
-            .parse()
-            .map_err(|e| SrtError::InvalidConfig(format!("Invalid address: {e}")))?;
+        let addr = format!("{host}:{port}");
 
         info!("Connecting SRT sender to {}", addr);
 
-        let socket = SrtSocket::builder()
-            .set(|options| {
-                options.latency = std::time::Duration::from_millis(self.latency_ms as u64);
-                if let Some(ref pass) = self.passphrase {
-                    options.encryption = srt_tokio::options::Encryption::Aes128 {
-                        passphrase: pass.clone().into(),
-                    };
-                }
-            })
-            .caller(addr)
-            .connect()
+        let mut builder =
+            SrtSocket::builder().latency(Duration::from_millis(self.latency_ms as u64));
+
+        if let Some(ref pass) = self.passphrase {
+            builder = builder.encryption(16, pass.clone());
+        }
+
+        let socket = builder
+            .call(addr.as_str(), None)
             .await
             .map_err(|e| SrtError::ConnectionFailed(format!("{e}")))?;
 
@@ -60,7 +57,7 @@ impl SrtSender {
             .as_mut()
             .ok_or_else(|| SrtError::SendFailed("Not connected".into()))?;
 
-        let instant = srt_tokio::instant::Instant::now();
+        let instant = Instant::now();
         socket
             .send((instant, data))
             .await
