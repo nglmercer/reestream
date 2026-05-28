@@ -20,12 +20,23 @@ pub async fn serve_index() -> impl IntoResponse {
     }
 }
 
-pub async fn serve_asset(Path(path): Path<String>) -> impl IntoResponse {
-    match DashboardAssets::get(&path) {
+pub async fn serve_assets(Path(path): Path<String>) -> impl IntoResponse {
+    let full_path = format!("assets/{path}");
+    match DashboardAssets::get(&full_path) {
         Some(content) => {
-            let mime = mime_guess(&path);
+            let mime = mime_guess(&full_path);
             let body = content.data.to_vec();
             (StatusCode::OK, [("content-type", mime)], body).into_response()
+        }
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+pub async fn serve_favicon() -> impl IntoResponse {
+    match DashboardAssets::get("favicon.svg") {
+        Some(content) => {
+            let body = content.data.to_vec();
+            (StatusCode::OK, [("content-type", "image/svg+xml")], body).into_response()
         }
         None => StatusCode::NOT_FOUND.into_response(),
     }

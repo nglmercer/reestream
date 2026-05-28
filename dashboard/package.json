@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.0",
+    "flv.js": "^1.6.2",
     "preact": "^10.29.1",
     "tailwindcss": "^4.3.0"
   },

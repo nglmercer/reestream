@@ -92,6 +92,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let connection_pool = Arc::new(reestream::hardening::ConnectionPool::new(1000));
     let rate_limiter = Arc::new(reestream::hardening::RateLimiter::new(100));
 
+    #[cfg(any(feature = "hls", feature = "api"))]
+    {
+        let hls_config = reestream::http_server::hls::HlsConfig::default();
+        let app_state = reestream::http_server::http::AppState {
+            stream_manager: Arc::new(reestream::http_server::stream::StreamManager::new()),
+            hls_segmenter: Arc::new(reestream::http_server::hls::HlsSegmenter::new(hls_config)),
+            flv_state: reestream::http_server::flv::FlvState::default(),
+            start_time: std::time::Instant::now(),
+        };
+        tokio::spawn(async move {
+            if let Err(e) =
+                reestream::http_server::http::start_http_server("0.0.0.0", 8080, app_state).await
+            {
+                error!("HTTP server error: {}", e);
+            }
+        });
+        info!("HTTP server starting on 0.0.0.0:8080");
+    }
+
     loop {
         tokio::select! {
             biased;

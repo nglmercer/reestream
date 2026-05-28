@@ -5,6 +5,7 @@ import { usePolling } from './hooks';
 import { useLogger } from './components/LogViewer';
 import { Header } from './components/Header';
 import { StatsCards } from './components/StatsCards';
+import { VideoPreview } from './components/VideoPreview';
 import { StreamsTable } from './components/StreamsTable';
 import { PlatformsTable } from './components/PlatformsTable';
 import { LogViewer } from './components/LogViewer';
@@ -55,11 +56,18 @@ export function App() {
   if (streams.error) addLog(`Streams error: ${streams.error}`, 'error');
   if (platforms.error) addLog(`Platforms error: ${platforms.error}`, 'error');
 
+  const streamNames = (streams.data ?? []).map((s) => ({
+    id: s.id,
+    name: s.name,
+    status: typeof s.status === 'string' ? s.status : Object.keys(s.status)[0],
+  }));
+
   return (
     <div class="min-h-screen bg-slate-950">
       <Header version={status.data?.version ?? '…'} />
       <main class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
         <StatsCards status={status.data} loading={status.loading} />
+        <VideoPreview streams={streamNames} />
         <StreamsTable
           streams={streams.data ?? []}
           loading={streams.loading}
