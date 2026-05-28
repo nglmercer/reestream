@@ -5,7 +5,6 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
-use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::EnvFilter;
 
 use reestream::client::handle_publisher;

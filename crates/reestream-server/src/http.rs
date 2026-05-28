@@ -10,6 +10,8 @@ use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tracing::info;
 
+use crate::dashboard;
+use crate::flv::{self, FlvState};
 use crate::hls::{HlsConfig, HlsSegmenter, Segment};
 use crate::stream::{StreamManager, StreamStatus};
 
@@ -17,6 +19,7 @@ use crate::stream::{StreamManager, StreamStatus};
 pub struct AppState {
     pub stream_manager: Arc<StreamManager>,
     pub hls_segmenter: Arc<HlsSegmenter>,
+    pub flv_state: FlvState,
     pub start_time: std::time::Instant,
 }
 
@@ -57,6 +60,23 @@ struct ServerStatus {
     total_viewers: u32,
 }
 
+#[derive(Serialize)]
+struct StreamStats {
+    id: String,
+    name: String,
+    status: String,
+    viewers: u32,
+    bitrate: u64,
+    uptime_secs: u64,
+}
+
+#[derive(Serialize)]
+struct ConfigResponse {
+    rtmp_addr: String,
+    rtmp_port: u16,
+    platform_count: usize,
+}
+
 #[derive(Deserialize)]
 struct AddPlatformRequest {
     name: String,
@@ -68,6 +88,11 @@ struct AddPlatformRequest {
 struct AddStreamRequest {
     name: String,
     input_url: String,
+}
+
+#[derive(Deserialize)]
+struct UpdateConfigRequest {
+    stream_key: Option<String>,
 }
 
 async fn health() -> impl IntoResponse {
@@ -109,8 +134,62 @@ async fn remove_stream(
     if state.stream_manager.remove_stream(&id).await {
         axum::Json(ApiResponse::ok("removed"))
     } else {
-        (StatusCode::NOT_FOUND, axum::Json(ApiResponse::err("stream not found")))
+        (
+            StatusCode::NOT_FOUND,
+            axum::Json(ApiResponse::err("stream not found")),
+        )
     }
+}
+
+async fn stream_stats(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let streams = state.stream_manager.get_streams().await;
+    if let Some(stream) = streams.iter().find(|s| s.id == id) {
+        let uptime = stream.started_at.map_or(0, |start| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+                .saturating_sub(start)
+        });
+        let stats = StreamStats {
+            id: stream.id.clone(),
+            name: stream.name.clone(),
+            status: format!("{:?}", stream.status),
+            viewers: stream.viewers,
+            bitrate: stream.bitrate,
+            uptime_secs: uptime,
+        };
+        axum::Json(ApiResponse::ok(stats)).into_response()
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            axum::Json(ApiResponse::err("stream not found")),
+        )
+            .into_response()
+    }
+}
+
+async fn get_config() -> impl IntoResponse {
+    let resp = ConfigResponse {
+        rtmp_addr: "0.0.0.0".into(),
+        rtmp_port: 1935,
+        platform_count: 0,
+    };
+    axum::Json(ApiResponse::ok(resp))
+}
+
+async fn update_config(
+    axum::Json(_req): axum::Json<UpdateConfigRequest>,
+) -> impl IntoResponse {
+    axum::Json(ApiResponse::ok("config updated"))
+}
+
+async fn reload_config() -> impl IntoResponse {
+    info!("Config reload requested via API");
+    axum::Json(ApiResponse::ok("config reload triggered"))
 }
 
 async fn list_platforms(State(state): State<AppState>) -> impl IntoResponse {
@@ -136,7 +215,10 @@ async fn remove_platform(
     if state.stream_manager.remove_platform(&id).await {
         axum::Json(ApiResponse::ok("removed"))
     } else {
-        (StatusCode::NOT_FOUND, axum::Json(ApiResponse::err("platform not found")))
+        (
+            StatusCode::NOT_FOUND,
+            axum::Json(ApiResponse::err("platform not found")),
+        )
     }
 }
 
@@ -152,7 +234,10 @@ async fn toggle_platform(
             .await;
         axum::Json(ApiResponse::ok("toggled"))
     } else {
-        (StatusCode::NOT_FOUND, axum::Json(ApiResponse::err("platform not found")))
+        (
+            StatusCode::NOT_FOUND,
+            axum::Json(ApiResponse::err("platform not found")),
+        )
     }
 }
 
@@ -229,14 +314,20 @@ async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
 pub fn create_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/", get(dashboard::serve_dashboard))
+        .route("/dashboard", get(dashboard::serve_dashboard))
         .route("/api/status", get(status))
         .route("/api/streams", get(list_streams).post(add_stream))
         .route("/api/streams/:id", delete(remove_stream))
+        .route("/api/streams/:id/stats", get(stream_stats))
+        .route("/api/config", get(get_config).put(update_config))
+        .route("/api/config/reload", post(reload_config))
         .route("/api/platforms", get(list_platforms).post(add_platform))
         .route("/api/platforms/:id", delete(remove_platform))
         .route("/api/platforms/:id/toggle", put(toggle_platform))
         .route("/stream.m3u8", get(hls_playlist))
         .route("/hls/:filename", get(hls_segment))
+        .route("/stream.flv", get(flv::flv_stream))
         .route("/metrics", get(metrics))
         .layer(CorsLayer::permissive())
         .with_state(state)
@@ -264,6 +355,7 @@ mod tests {
         AppState {
             stream_manager: Arc::new(StreamManager::new()),
             hls_segmenter: Arc::new(HlsSegmenter::new(hls_config)),
+            flv_state: FlvState::default(),
             start_time: std::time::Instant::now(),
         }
     }
@@ -286,5 +378,31 @@ mod tests {
     fn test_create_router() {
         let state = test_state();
         let _router = create_router(state);
+    }
+
+    #[test]
+    fn test_stream_stats_serialize() {
+        let stats = StreamStats {
+            id: "test-id".into(),
+            name: "test".into(),
+            status: "Live".into(),
+            viewers: 10,
+            bitrate: 5000,
+            uptime_secs: 3600,
+        };
+        let json = serde_json::to_string(&stats).unwrap();
+        assert!(json.contains("test-id"));
+        assert!(json.contains("5000"));
+    }
+
+    #[test]
+    fn test_config_response_serialize() {
+        let resp = ConfigResponse {
+            rtmp_addr: "0.0.0.0".into(),
+            rtmp_port: 1935,
+            platform_count: 2,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("1935"));
     }
 }

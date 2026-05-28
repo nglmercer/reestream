@@ -94,7 +94,6 @@ impl Drop for FfmpegProcess {
     }
 }
 
-#[allow(dead_code)]
 pub struct FfmpegSupervisor {
     ffmpeg_path: PathBuf,
     args: Vec<String>,
@@ -102,7 +101,6 @@ pub struct FfmpegSupervisor {
     restart_delay_ms: u64,
 }
 
-#[allow(dead_code)]
 impl FfmpegSupervisor {
     pub fn new(ffmpeg_path: PathBuf, args: Vec<String>) -> Self {
         Self {

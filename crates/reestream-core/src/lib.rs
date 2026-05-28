@@ -3,6 +3,7 @@ pub mod config;
 pub mod error;
 pub mod hardening;
 pub mod pipeline;
+pub mod pipeline_impl;
 pub mod provider;
 pub mod server;
 

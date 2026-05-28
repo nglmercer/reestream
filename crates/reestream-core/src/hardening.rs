@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{RwLock, watch};
-use tracing::{error, info, warn};
+use tracing::info;
 
 pub struct GracefulShutdown {
     shutdown_tx: watch::Sender<bool>,
@@ -95,14 +95,12 @@ impl ConfigWatcher {
     }
 
     pub fn check_changed(&mut self) -> bool {
-        if let Ok(metadata) = std::fs::metadata(&self.path) {
-            if let Ok(modified) = metadata.modified() {
-                let changed = self
-                    .last_modified
-                    .map_or(true, |last| modified > last);
-                self.last_modified = Some(modified);
-                return changed;
-            }
+        if let Ok(metadata) = std::fs::metadata(&self.path)
+            && let Ok(modified) = metadata.modified()
+        {
+            let changed = self.last_modified.is_none_or(|last| modified > last);
+            self.last_modified = Some(modified);
+            return changed;
         }
         false
     }

@@ -1,9 +1,9 @@
 use bytes::Bytes;
 use futures::prelude::*;
 use srt_tokio::SrtSocket;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::broadcast;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use crate::config::SrtConfig;
 use crate::error::SrtError;

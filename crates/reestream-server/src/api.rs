@@ -53,6 +53,9 @@ pub struct UpdateConfigRequest {
 }
 
 pub const API_ROUTES: &[(&str, &str)] = &[
+    ("GET", "/"),
+    ("GET", "/dashboard"),
+    ("GET", "/health"),
     ("GET", "/api/status"),
     ("GET", "/api/streams"),
     ("POST", "/api/streams"),
@@ -65,6 +68,10 @@ pub const API_ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/platforms"),
     ("DELETE", "/api/platforms/:id"),
     ("PUT", "/api/platforms/:id/toggle"),
+    ("GET", "/stream.m3u8"),
+    ("GET", "/hls/:filename"),
+    ("GET", "/stream.flv"),
+    ("GET", "/metrics"),
 ];
 
 #[cfg(test)]
@@ -117,6 +124,6 @@ mod tests {
 
     #[test]
     fn test_api_routes_count() {
-        assert_eq!(API_ROUTES.len(), 12);
+        assert_eq!(API_ROUTES.len(), 19);
     }
 }

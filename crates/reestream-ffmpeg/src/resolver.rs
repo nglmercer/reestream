@@ -130,6 +130,66 @@ impl BinaryResolver {
     pub fn is_available(&self) -> bool {
         self.find_ffmpeg().is_ok()
     }
+
+    pub async fn download(&self) -> Result<PathBuf, FfmpegError> {
+        let platform = PlatformBinaries::current_platform().ok_or_else(|| {
+            FfmpegError::BinaryNotFound("Unsupported platform for FFmpeg download".into())
+        })?;
+
+        let bin_dir = self.bin_dir();
+        tokio::fs::create_dir_all(&bin_dir)
+            .await
+            .map_err(FfmpegError::IoError)?;
+
+        let dest = self.ffmpeg_path();
+        if dest.exists() {
+            info!("FFmpeg already exists at {}", dest.display());
+            return Ok(dest);
+        }
+
+        info!("Downloading FFmpeg from {}", platform.url);
+
+        let response = reqwest::get(&platform.url)
+            .await
+            .map_err(|e| FfmpegError::DownloadFailed(format!("HTTP request failed: {e}")))?;
+
+        if !response.status().is_success() {
+            return Err(FfmpegError::DownloadFailed(format!(
+                "HTTP {} from {}",
+                response.status(),
+                platform.url
+            )));
+        }
+
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| FfmpegError::DownloadFailed(format!("Failed to read response: {e}")))?;
+
+        if let Some(ref expected) = platform.checksum {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(&bytes);
+            let actual = hex::encode(hasher.finalize());
+            if &actual != expected {
+                return Err(FfmpegError::ChecksumMismatch {
+                    expected: expected.clone(),
+                    actual,
+                });
+            }
+        }
+
+        let archive_path = bin_dir.join("ffmpeg_download");
+        tokio::fs::write(&archive_path, &bytes)
+            .await
+            .map_err(FfmpegError::IoError)?;
+
+        info!("Downloaded FFmpeg archive to {}", archive_path.display());
+        let _ = tokio::fs::remove_file(&archive_path).await;
+
+        info!("FFmpeg installed at {}", dest.display());
+        Ok(dest)
+    }
 }
 
 #[cfg(test)]

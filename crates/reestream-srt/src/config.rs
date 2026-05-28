@@ -36,15 +36,17 @@ impl SrtConfig {
         if self.latency_ms == 0 {
             return Err("SRT latency_ms cannot be 0".into());
         }
-        if let Some(ref pass) = self.passphrase {
-            if pass.len() < 10 {
-                return Err("SRT passphrase must be at least 10 characters".into());
-            }
+        if let Some(ref pass) = self.passphrase
+            && pass.len() < 10
+        {
+            return Err("SRT passphrase must be at least 10 characters".into());
         }
-        if let Some(len) = self.pbkey_len {
-            if len != 16 && len != 24 && len != 32 {
-                return Err("SRT pbkey_len must be 16, 24, or 32".into());
-            }
+        if let Some(len) = self.pbkey_len
+            && len != 16
+            && len != 24
+            && len != 32
+        {
+            return Err("SRT pbkey_len must be 16, 24, or 32".into());
         }
         Ok(())
     }

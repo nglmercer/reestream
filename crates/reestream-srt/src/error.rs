@@ -33,6 +33,12 @@ impl From<std::io::Error> for SrtError {
     }
 }
 
+impl From<String> for SrtError {
+    fn from(s: String) -> Self {
+        Self::InvalidConfig(s)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

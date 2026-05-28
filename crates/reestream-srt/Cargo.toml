@@ -26,4 +26,5 @@ url = { version = "2.5", features = ["serde"] }
 futures = "0.3"
 
 [dev-dependencies]
+serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
