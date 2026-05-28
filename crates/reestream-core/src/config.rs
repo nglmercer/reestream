@@ -1,10 +1,10 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use std::str::FromStr;
 use url::Url;
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Config {
     pub rtmp_addr: String,
     pub rtmp_port: u16,
@@ -12,20 +12,126 @@ pub struct Config {
     pub platform: Option<Vec<Platform>>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Platform {
     pub url: Url,
     pub key: String,
-    #[allow(dead_code)]
     pub orientation: Orientation,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum Orientation {
     #[default]
     Horizontal,
     Vertical,
+}
+
+pub struct ConfigBuilder {
+    rtmp_addr: String,
+    rtmp_port: u16,
+    stream_key: String,
+    platforms: Vec<Platform>,
+}
+
+impl ConfigBuilder {
+    pub fn new() -> Self {
+        Self {
+            rtmp_addr: "0.0.0.0".into(),
+            rtmp_port: 1935,
+            stream_key: String::new(),
+            platforms: Vec::new(),
+        }
+    }
+
+    pub fn addr(mut self, addr: impl Into<String>) -> Self {
+        self.rtmp_addr = addr.into();
+        self
+    }
+
+    pub fn port(mut self, port: u16) -> Self {
+        self.rtmp_port = port;
+        self
+    }
+
+    pub fn stream_key(mut self, key: impl Into<String>) -> Self {
+        self.stream_key = key.into();
+        self
+    }
+
+    pub fn add_platform(
+        mut self,
+        url: Url,
+        key: impl Into<String>,
+        orientation: Orientation,
+    ) -> Self {
+        self.platforms.push(Platform {
+            url,
+            key: key.into(),
+            orientation,
+        });
+        self
+    }
+
+    pub fn build(self) -> Config {
+        Config {
+            rtmp_addr: self.rtmp_addr,
+            rtmp_port: self.rtmp_port,
+            stream_key: self.stream_key,
+            platform: if self.platforms.is_empty() {
+                None
+            } else {
+                Some(self.platforms)
+            },
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.stream_key.is_empty() {
+            return Err("stream_key cannot be empty".into());
+        }
+        if self.rtmp_port == 0 {
+            return Err("rtmp_port cannot be 0".into());
+        }
+        if self.rtmp_addr.is_empty() {
+            return Err("rtmp_addr cannot be empty".into());
+        }
+        for (i, p) in self.platforms.iter().enumerate() {
+            if p.key.is_empty() {
+                return Err(format!("platform[{i}] key cannot be empty"));
+            }
+            if p.url.host().is_none() {
+                return Err(format!("platform[{i}] url has no host"));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Default for ConfigBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Config {
+    pub fn builder() -> ConfigBuilder {
+        ConfigBuilder::new()
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.stream_key.is_empty() {
+            return Err("stream_key cannot be empty".into());
+        }
+        if self.rtmp_port == 0 {
+            return Err("rtmp_port cannot be 0".into());
+        }
+        Ok(())
+    }
+
+    pub fn to_toml(&self) -> Result<String, toml::ser::Error> {
+        toml::to_string(self)
+    }
 }
 
 impl FromStr for Config {
@@ -285,5 +391,107 @@ stream_key = "file-key""#
         assert_eq!(platforms.len(), 2);
         assert_eq!(platforms[0].key, "key1");
         assert_eq!(platforms[1].key, "key2");
+    }
+
+    #[test]
+    fn test_config_builder_defaults() {
+        let config = ConfigBuilder::new()
+            .stream_key("test-key")
+            .build();
+        assert_eq!(config.rtmp_addr, "0.0.0.0");
+        assert_eq!(config.rtmp_port, 1935);
+        assert_eq!(config.stream_key, "test-key");
+        assert!(config.platform.is_none());
+    }
+
+    #[test]
+    fn test_config_builder_full() {
+        let config = ConfigBuilder::new()
+            .addr("127.0.0.1")
+            .port(9999)
+            .stream_key("my-key")
+            .add_platform(
+                Url::parse("rtmp://twitch.tv/app").unwrap(),
+                "twitch-key",
+                Orientation::Horizontal,
+            )
+            .add_platform(
+                Url::parse("rtmp://youtube.com/live2").unwrap(),
+                "yt-key",
+                Orientation::Vertical,
+            )
+            .build();
+        assert_eq!(config.rtmp_addr, "127.0.0.1");
+        assert_eq!(config.rtmp_port, 9999);
+        let platforms = config.platform.unwrap();
+        assert_eq!(platforms.len(), 2);
+    }
+
+    #[test]
+    fn test_config_builder_validate_ok() {
+        let builder = ConfigBuilder::new().stream_key("key");
+        assert!(builder.validate().is_ok());
+    }
+
+    #[test]
+    fn test_config_builder_validate_empty_key() {
+        let builder = ConfigBuilder::new();
+        assert!(builder.validate().is_err());
+    }
+
+    #[test]
+    fn test_config_builder_validate_zero_port() {
+        let builder = ConfigBuilder::new().port(0).stream_key("key");
+        assert!(builder.validate().is_err());
+    }
+
+    #[test]
+    fn test_config_builder_validate_empty_platform_key() {
+        let builder = ConfigBuilder::new()
+            .stream_key("key")
+            .add_platform(
+                Url::parse("rtmp://twitch.tv/app").unwrap(),
+                "",
+                Orientation::Horizontal,
+            );
+        assert!(builder.validate().is_err());
+    }
+
+    #[test]
+    fn test_config_validate() {
+        let config = ConfigBuilder::new().stream_key("key").build();
+        assert!(config.validate().is_ok());
+
+        let bad = ConfigBuilder::new().build();
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn test_config_to_toml() {
+        let config = ConfigBuilder::new()
+            .addr("0.0.0.0")
+            .port(1935)
+            .stream_key("key")
+            .build();
+        let toml = config.to_toml().unwrap();
+        assert!(toml.contains("rtmp_addr"));
+        assert!(toml.contains("stream_key"));
+    }
+
+    #[test]
+    fn test_config_builder_default_trait() {
+        let builder = ConfigBuilder::default();
+        assert_eq!(builder.rtmp_addr, "0.0.0.0");
+    }
+
+    #[test]
+    fn test_config_builder_chaining() {
+        let config = Config::builder()
+            .addr("10.0.0.1")
+            .port(8080)
+            .stream_key("chain-key")
+            .build();
+        assert_eq!(config.rtmp_addr, "10.0.0.1");
+        assert_eq!(config.rtmp_port, 8080);
     }
 }

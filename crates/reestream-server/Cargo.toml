@@ -1,0 +1,34 @@
+[package]
+name = "reestream-server"
+version = "0.2.0"
+edition = "2024"
+authors = ["RustLangES contact@rustlang-es.org"]
+description = "HLS/HTTP streaming server and REST API"
+license = "MIT OR Apache-2.0"
+
+[features]
+default = []
+hls = ["dep:tower-http"]
+api = ["dep:serde_json"]
+
+[dependencies]
+axum = "0.8"
+bytes = "1.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", optional = true }
+tokio = { version = "1", default-features = false, features = [
+    "io-util",
+    "macros",
+    "net",
+    "rt-multi-thread",
+    "sync",
+    "time",
+    "fs",
+] }
+tower-http = { version = "0.6", features = ["cors"], optional = true }
+tracing = { version = "0.1", features = ["log"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

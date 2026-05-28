@@ -1,0 +1,4 @@
+rtmp_addr = "127.0.0.1"
+rtmp_port = 1935
+stream_key = "empty-platforms-key"
+platform = []

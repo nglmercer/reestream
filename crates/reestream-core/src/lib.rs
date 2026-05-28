@@ -1,0 +1,14 @@
+pub mod client;
+pub mod config;
+pub mod error;
+pub mod pipeline;
+pub mod provider;
+pub mod server;
+
+use tokio::io::{AsyncRead, AsyncWrite};
+
+pub trait AsyncReadWrite: AsyncRead + AsyncWrite + Send + Unpin {}
+
+impl<T: AsyncRead + AsyncWrite + Send + Unpin> AsyncReadWrite for T {}
+
+pub type DynStream = Box<dyn AsyncReadWrite + 'static>;

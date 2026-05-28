@@ -2,26 +2,13 @@ use clap::Parser;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 use tracing_subscriber::filter::LevelFilter;
 
-mod client;
-mod config;
-mod error;
-mod provider;
-mod server;
-
-use crate::client::handle_publisher;
-use crate::config::Config;
-
-pub trait AsyncReadWrite: AsyncRead + AsyncWrite + Send + Unpin {}
-
-impl<T: AsyncRead + AsyncWrite + Send + Unpin> AsyncReadWrite for T {}
-
-pub type DynStream = Box<dyn AsyncReadWrite + 'static>;
+use reestream::client::handle_publisher;
+use reestream::config::Config;
 
 #[derive(clap::Parser)]
 struct Args {
@@ -47,17 +34,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..
     } = &config;
 
-    println!("Configuración cargada:");
-    println!("  Listener: {rtmp_addr}:{rtmp_port}",);
+    println!("Configuration loaded:");
+    println!("  Listener: {rtmp_addr}:{rtmp_port}");
     println!("  Stream key: {stream_key}");
     println!(
-        "  Plataformas configuradas: {}",
+        "  Configured platforms: {}",
         platform.clone().unwrap_or_default().len()
     );
 
     let addr: SocketAddr = format!("{rtmp_addr}:{rtmp_port}").parse()?;
     let listener = TcpListener::bind(addr).await?;
-    info!("RTMP relay escuchando en {}", addr);
+    info!("RTMP relay listening on {}", addr);
 
     let platforms = Arc::new(RwLock::new(platform.clone().unwrap_or_default()));
 
@@ -66,31 +53,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             biased;
 
             _ = tokio::signal::ctrl_c() => {
-                info!("Recibida señal Ctrl+C, cerrando servidor...");
+                info!("Received Ctrl+C signal, shutting down...");
                 break;
             }
 
             accept = listener.accept() => {
                 match accept {
                     Ok((socket, peer_addr)) => {
-                        // reduce latency: disable Nagle on incoming socket
                         if let Err(e) = socket.set_nodelay(true) {
-                            warn!("No se pudo set_nodelay al socket entrante: {}", e);
+                            warn!("Failed to set_nodelay on incoming socket: {}", e);
                         }
 
-                        info!("Nueva conexión entrante desde {}", peer_addr);
+                        info!("New incoming connection from {}", peer_addr);
                         let platforms = platforms.clone();
                         let stream_key = stream_key.clone();
                         tokio::spawn(async move {
                             if let Err(e) = handle_publisher(socket, platforms, stream_key).await {
-                                error!("Error en conexión desde {}: {:#}", peer_addr, e);
+                                error!("Error in connection from {}: {:#}", peer_addr, e);
                             } else {
-                                info!("Conexión desde {} finalizada correctamente", peer_addr);
+                                info!("Connection from {} ended correctly", peer_addr);
                             }
                         });
                     }
                     Err(e) => {
-                        warn!("Error aceptando conexión: {}", e);
+                        warn!("Error accepting connection: {}", e);
                     }
                 }
             }
@@ -98,4 +84,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reestream::AsyncReadWrite;
+
+    fn parse_socket_addr(addr: &str, port: u16) -> Result<SocketAddr, Box<dyn std::error::Error>> {
+        let addr: SocketAddr = format!("{addr}:{port}").parse()?;
+        Ok(addr)
+    }
+
+    #[test]
+    fn test_parse_socket_addr_valid() {
+        let addr = parse_socket_addr("0.0.0.0", 1935).unwrap();
+        assert_eq!(addr, "0.0.0.0:1935".parse::<SocketAddr>().unwrap());
+    }
+
+    #[test]
+    fn test_parse_socket_addr_localhost() {
+        let addr = parse_socket_addr("127.0.0.1", 8080).unwrap();
+        assert_eq!(addr, "127.0.0.1:8080".parse::<SocketAddr>().unwrap());
+    }
+
+    #[test]
+    fn test_parse_socket_addr_invalid() {
+        let result = parse_socket_addr("not-an-address", 1935);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_args_default_config() {
+        let args = Args::try_parse_from(["reestream"]).unwrap();
+        assert_eq!(args.config, PathBuf::from("config.toml"));
+    }
+
+    #[test]
+    fn test_args_custom_config_short() {
+        let args = Args::try_parse_from(["reestream", "-c", "/tmp/myconfig.toml"]).unwrap();
+        assert_eq!(args.config, PathBuf::from("/tmp/myconfig.toml"));
+    }
+
+    #[test]
+    fn test_args_custom_config_long() {
+        let args =
+            Args::try_parse_from(["reestream", "--config", "/etc/reestream/config.toml"]).unwrap();
+        assert_eq!(args.config, PathBuf::from("/etc/reestream/config.toml"));
+    }
+
+    #[test]
+    fn test_async_read_write_trait_bounds() {
+        fn _assert_impl<T: AsyncReadWrite>() {}
+        _assert_impl::<tokio::net::TcpStream>();
+    }
 }

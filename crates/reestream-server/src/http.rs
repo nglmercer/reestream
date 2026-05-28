@@ -1,0 +1,290 @@
+use axum::{
+    Router,
+    extract::{Path, State},
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{delete, get, post, put},
+};
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tower_http::cors::CorsLayer;
+use tracing::info;
+
+use crate::hls::{HlsConfig, HlsSegmenter, Segment};
+use crate::stream::{StreamManager, StreamStatus};
+
+#[derive(Clone)]
+pub struct AppState {
+    pub stream_manager: Arc<StreamManager>,
+    pub hls_segmenter: Arc<HlsSegmenter>,
+    pub start_time: std::time::Instant,
+}
+
+#[derive(Serialize)]
+struct ApiResponse<T: Serialize> {
+    success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<T>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+impl<T: Serialize> ApiResponse<T> {
+    fn ok(data: T) -> Self {
+        Self {
+            success: true,
+            data: Some(data),
+            error: None,
+        }
+    }
+}
+
+impl ApiResponse<()> {
+    fn err(msg: impl Into<String>) -> Self {
+        Self {
+            success: false,
+            data: None,
+            error: Some(msg.into()),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct ServerStatus {
+    version: &'static str,
+    uptime_seconds: u64,
+    active_streams: usize,
+    total_viewers: u32,
+}
+
+#[derive(Deserialize)]
+struct AddPlatformRequest {
+    name: String,
+    url: String,
+    key: String,
+}
+
+#[derive(Deserialize)]
+struct AddStreamRequest {
+    name: String,
+    input_url: String,
+}
+
+async fn health() -> impl IntoResponse {
+    StatusCode::OK
+}
+
+async fn status(State(state): State<AppState>) -> impl IntoResponse {
+    let streams = state.stream_manager.get_streams().await;
+    let total_viewers: u32 = streams.iter().map(|s| s.viewers).sum();
+    let resp = ApiResponse::ok(ServerStatus {
+        version: env!("CARGO_PKG_VERSION"),
+        uptime_seconds: state.start_time.elapsed().as_secs(),
+        active_streams: streams.len(),
+        total_viewers,
+    });
+    axum::Json(resp)
+}
+
+async fn list_streams(State(state): State<AppState>) -> impl IntoResponse {
+    let streams = state.stream_manager.get_streams().await;
+    axum::Json(ApiResponse::ok(streams))
+}
+
+async fn add_stream(
+    State(state): State<AppState>,
+    axum::Json(req): axum::Json<AddStreamRequest>,
+) -> impl IntoResponse {
+    let id = state
+        .stream_manager
+        .add_stream(req.name, req.input_url)
+        .await;
+    (StatusCode::CREATED, axum::Json(ApiResponse::ok(id)))
+}
+
+async fn remove_stream(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if state.stream_manager.remove_stream(&id).await {
+        axum::Json(ApiResponse::ok("removed"))
+    } else {
+        (StatusCode::NOT_FOUND, axum::Json(ApiResponse::err("stream not found")))
+    }
+}
+
+async fn list_platforms(State(state): State<AppState>) -> impl IntoResponse {
+    let platforms = state.stream_manager.get_platforms().await;
+    axum::Json(ApiResponse::ok(platforms))
+}
+
+async fn add_platform(
+    State(state): State<AppState>,
+    axum::Json(req): axum::Json<AddPlatformRequest>,
+) -> impl IntoResponse {
+    let id = state
+        .stream_manager
+        .add_platform(req.name, req.url, req.key)
+        .await;
+    (StatusCode::CREATED, axum::Json(ApiResponse::ok(id)))
+}
+
+async fn remove_platform(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if state.stream_manager.remove_platform(&id).await {
+        axum::Json(ApiResponse::ok("removed"))
+    } else {
+        (StatusCode::NOT_FOUND, axum::Json(ApiResponse::err("platform not found")))
+    }
+}
+
+async fn toggle_platform(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let platforms = state.stream_manager.get_platforms().await;
+    if let Some(p) = platforms.iter().find(|p| p.id == id) {
+        state
+            .stream_manager
+            .toggle_platform(&id, !p.enabled)
+            .await;
+        axum::Json(ApiResponse::ok("toggled"))
+    } else {
+        (StatusCode::NOT_FOUND, axum::Json(ApiResponse::err("platform not found")))
+    }
+}
+
+async fn hls_playlist(State(state): State<AppState>) -> impl IntoResponse {
+    let segments = state.hls_segmenter.get_segments().await;
+    let playlist = state.hls_segmenter.generate_playlist(&segments, true);
+    (
+        StatusCode::OK,
+        [("content-type", "application/vnd.apple.mpegurl")],
+        playlist,
+    )
+}
+
+async fn hls_segment(
+    State(state): State<AppState>,
+    Path(filename): Path<String>,
+) -> impl IntoResponse {
+    let segments = state.hls_segmenter.get_segments().await;
+    if segments.iter().any(|s| s.filename == filename) {
+        let segment_dir = &state.hls_segmenter.config().segment_dir;
+        let path = segment_dir.join(&filename);
+        match tokio::fs::read(&path).await {
+            Ok(data) => (
+                StatusCode::OK,
+                [("content-type", "video/mp2t")],
+                data,
+            )
+                .into_response(),
+            Err(_) => StatusCode::NOT_FOUND.into_response(),
+        }
+    } else {
+        StatusCode::NOT_FOUND.into_response()
+    }
+}
+
+async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
+    let streams = state.stream_manager.get_streams().await;
+    let total_viewers: u32 = streams.iter().map(|s| s.viewers).sum();
+    let uptime = state.start_time.elapsed().as_secs();
+
+    let mut metrics = String::new();
+    metrics.push_str("# HELP reestream_uptime_seconds Server uptime\n");
+    metrics.push_str("# TYPE reestream_uptime_seconds gauge\n");
+    metrics.push_str(&format!("reestream_uptime_seconds {uptime}\n"));
+    metrics.push_str("# HELP reestream_streams_total Number of streams\n");
+    metrics.push_str("# TYPE reestream_streams_total gauge\n");
+    metrics.push_str(&format!("reestream_streams_total {}\n", streams.len()));
+    metrics.push_str("# HELP reestream_viewers_total Total viewers\n");
+    metrics.push_str("# TYPE reestream_viewers_total gauge\n");
+    metrics.push_str(&format!("reestream_viewers_total {total_viewers}\n"));
+
+    for stream in &streams {
+        let status = match &stream.status {
+            StreamStatus::Live => 1,
+            _ => 0,
+        };
+        metrics.push_str(&format!(
+            "reestream_stream_status{{id=\"{}\",name=\"{}\"}} {status}\n",
+            stream.id, stream.name
+        ));
+        metrics.push_str(&format!(
+            "reestream_stream_bitrate_kbps{{id=\"{}\"}} {}\n",
+            stream.id, stream.bitrate
+        ));
+    }
+
+    (
+        StatusCode::OK,
+        [("content-type", "text/plain; version=0.0.4")],
+        metrics,
+    )
+}
+
+pub fn create_router(state: AppState) -> Router {
+    Router::new()
+        .route("/health", get(health))
+        .route("/api/status", get(status))
+        .route("/api/streams", get(list_streams).post(add_stream))
+        .route("/api/streams/:id", delete(remove_stream))
+        .route("/api/platforms", get(list_platforms).post(add_platform))
+        .route("/api/platforms/:id", delete(remove_platform))
+        .route("/api/platforms/:id/toggle", put(toggle_platform))
+        .route("/stream.m3u8", get(hls_playlist))
+        .route("/hls/:filename", get(hls_segment))
+        .route("/metrics", get(metrics))
+        .layer(CorsLayer::permissive())
+        .with_state(state)
+}
+
+pub async fn start_http_server(
+    addr: &str,
+    port: u16,
+    state: AppState,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let bind = format!("{addr}:{port}");
+    let listener = tokio::net::TcpListener::bind(&bind).await?;
+    info!("HTTP server listening on {}", bind);
+    axum::serve(listener, create_router(state)).await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hls::HlsConfig;
+
+    fn test_state() -> AppState {
+        let hls_config = HlsConfig::default();
+        AppState {
+            stream_manager: Arc::new(StreamManager::new()),
+            hls_segmenter: Arc::new(HlsSegmenter::new(hls_config)),
+            start_time: std::time::Instant::now(),
+        }
+    }
+
+    #[test]
+    fn test_api_response_ok() {
+        let resp = ApiResponse::ok("test");
+        assert!(resp.success);
+        assert_eq!(resp.data.unwrap(), "test");
+    }
+
+    #[test]
+    fn test_api_response_err() {
+        let resp: ApiResponse<()> = ApiResponse::err("fail");
+        assert!(!resp.success);
+        assert_eq!(resp.error.unwrap(), "fail");
+    }
+
+    #[test]
+    fn test_create_router() {
+        let state = test_state();
+        let _router = create_router(state);
+    }
+}
