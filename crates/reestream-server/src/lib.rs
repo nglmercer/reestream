@@ -9,5 +9,6 @@ pub mod http;
 
 pub mod dashboard;
 pub mod flv;
+pub mod recording;
 pub mod stream;
 pub mod webhook;

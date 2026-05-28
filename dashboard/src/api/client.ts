@@ -53,4 +53,18 @@ export const api = {
 
   reloadConfig: () =>
     request<string>('/api/config/reload', { method: 'POST' }),
+
+  getRecordings: () => request<unknown[]>('/api/recordings'),
+
+  startRecording: (streamId: string, inputUrl: string) =>
+    request<string>('/api/recordings/start', {
+      method: 'POST',
+      body: JSON.stringify({ stream_id: streamId, input_url: inputUrl }),
+    }),
+
+  stopRecording: (id: string) =>
+    request<string>(`/api/recordings/${id}/stop`, { method: 'POST' }),
+
+  deleteRecording: (id: string) =>
+    request<string>(`/api/recordings/${id}`, { method: 'DELETE' }),
 };

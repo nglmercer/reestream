@@ -125,10 +125,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(any(feature = "hls", feature = "api"))]
     {
         let hls_config = reestream::http_server::hls::HlsConfig::default();
+        let recording_config = reestream::http_server::recording::RecordingConfig {
+            enabled: true,
+            output_dir: std::path::PathBuf::from("/tmp/reestream/recordings"),
+            ..Default::default()
+        };
         let app_state = reestream::http_server::http::AppState {
             stream_manager: Arc::new(reestream::http_server::stream::StreamManager::new()),
             hls_segmenter: Arc::new(reestream::http_server::hls::HlsSegmenter::new(hls_config)),
             flv_state: reestream::http_server::flv::FlvState::default(),
+            recording_manager: Arc::new(reestream::http_server::recording::RecordingManager::new(
+                recording_config,
+            )),
             start_time: std::time::Instant::now(),
             config_path: args.config.clone(),
         };

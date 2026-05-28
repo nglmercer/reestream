@@ -11,6 +11,7 @@ import { PlatformsTable } from './components/PlatformsTable';
 import { LogViewer } from './components/LogViewer';
 import { SetupWizard } from './components/SetupWizard';
 import { SettingsPanel } from './components/SettingsPanel';
+import { RecordingControls } from './components/RecordingControls';
 
 const STATUS_POLL = 5_000;
 const STREAMS_POLL = 10_000;
@@ -66,6 +67,32 @@ export function App() {
     [addLog, platforms],
   );
 
+  const handleAddPlatform = useCallback(
+    async (name: string, url: string, key: string) => {
+      const res = await api.addPlatform({ name, url, key });
+      if (res.success) {
+        addLog(`Platform "${name}" added`);
+        platforms.refresh();
+      } else {
+        throw new Error(res.error ?? 'Failed to add platform');
+      }
+    },
+    [addLog, platforms],
+  );
+
+  const handleRemovePlatform = useCallback(
+    async (id: string) => {
+      const res = await api.removePlatform(id);
+      if (res.success) {
+        addLog('Platform removed');
+        platforms.refresh();
+      } else {
+        addLog(`Remove failed: ${res.error}`, 'error');
+      }
+    },
+    [addLog, platforms],
+  );
+
   if (status.error) addLog(`Status error: ${status.error}`, 'error');
   if (streams.error) addLog(`Streams error: ${streams.error}`, 'error');
   if (platforms.error) addLog(`Platforms error: ${platforms.error}`, 'error');
@@ -99,6 +126,7 @@ export function App() {
       <main class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
         <StatsCards status={status.data} loading={status.loading} />
         <VideoPreview streams={streamNames} />
+        <RecordingControls addLog={addLog} />
         <StreamsTable
           streams={streams.data ?? []}
           loading={streams.loading}
@@ -109,6 +137,8 @@ export function App() {
           loading={platforms.loading}
           onRefresh={platforms.refresh}
           onToggle={handleToggle}
+          onAdd={handleAddPlatform}
+          onRemove={handleRemovePlatform}
         />
         <LogViewer logs={logs} onClear={clearLogs} />
       </main>

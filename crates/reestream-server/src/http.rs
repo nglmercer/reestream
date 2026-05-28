@@ -13,6 +13,7 @@ use tracing::info;
 use crate::dashboard;
 use crate::flv::{self, FlvState};
 use crate::hls::HlsSegmenter;
+use crate::recording::{RecordingConfig, RecordingManager};
 use crate::stream::{StreamManager, StreamStatus};
 
 #[derive(Clone)]
@@ -20,6 +21,7 @@ pub struct AppState {
     pub stream_manager: Arc<StreamManager>,
     pub hls_segmenter: Arc<HlsSegmenter>,
     pub flv_state: FlvState,
+    pub recording_manager: Arc<RecordingManager>,
     pub start_time: std::time::Instant,
     pub config_path: std::path::PathBuf,
 }
@@ -315,6 +317,69 @@ async fn toggle_platform(
     }
 }
 
+async fn list_recordings(State(state): State<AppState>) -> impl IntoResponse {
+    let recordings = state.recording_manager.list_recordings().await;
+    axum::Json(ApiResponse::ok(recordings))
+}
+
+async fn start_recording(
+    State(state): State<AppState>,
+    axum::Json(req): axum::Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let stream_id = req
+        .get("stream_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("default");
+    let input_url = req
+        .get("input_url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("rtmp://0.0.0.0:1935/live");
+
+    match state
+        .recording_manager
+        .start_recording(stream_id, input_url)
+        .await
+    {
+        Ok(id) => {
+            info!("Recording started: {}", id);
+            (StatusCode::CREATED, axum::Json(ApiResponse::ok(id))).into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            axum::Json(ApiResponse::<()>::err(e)),
+        )
+            .into_response(),
+    }
+}
+
+async fn stop_recording(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match state.recording_manager.stop_recording(&id).await {
+        Ok(()) => axum::Json(ApiResponse::ok("stopped")).into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            axum::Json(ApiResponse::<()>::err(e)),
+        )
+            .into_response(),
+    }
+}
+
+async fn delete_recording(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match state.recording_manager.delete_recording(&id).await {
+        Ok(()) => axum::Json(ApiResponse::ok("deleted")).into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            axum::Json(ApiResponse::<()>::err(e)),
+        )
+            .into_response(),
+    }
+}
+
 async fn hls_playlist(State(state): State<AppState>) -> impl IntoResponse {
     let segments = state.hls_segmenter.get_segments().await;
     let playlist = state.hls_segmenter.generate_playlist(&segments, true);
@@ -407,6 +472,10 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/platforms", get(list_platforms).post(add_platform))
         .route("/api/platforms/{id}", delete(remove_platform))
         .route("/api/platforms/{id}/toggle", put(toggle_platform))
+        .route("/api/recordings", get(list_recordings))
+        .route("/api/recordings/start", post(start_recording))
+        .route("/api/recordings/{id}/stop", post(stop_recording))
+        .route("/api/recordings/{id}", delete(delete_recording))
         .route("/stream.m3u8", get(hls_playlist))
         .route("/hls/{filename}", get(hls_segment))
         .route("/stream.flv", get(flv_stream))
@@ -438,6 +507,7 @@ mod tests {
             stream_manager: Arc::new(StreamManager::new()),
             hls_segmenter: Arc::new(HlsSegmenter::new(hls_config)),
             flv_state: FlvState::default(),
+            recording_manager: Arc::new(RecordingManager::new(RecordingConfig::default())),
             start_time: std::time::Instant::now(),
             config_path: std::path::PathBuf::from("/tmp/test_config.toml"),
         }
