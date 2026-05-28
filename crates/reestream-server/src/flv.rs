@@ -1,9 +1,5 @@
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-};
-use bytes::{Bytes, BytesMut, BufMut};
+use axum::{http::StatusCode, response::IntoResponse};
+use bytes::{BufMut, Bytes, BytesMut};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -67,7 +63,7 @@ pub fn build_flv_tag(tag_type: u8, timestamp: u32, data: &[u8]) -> Bytes {
     buf.freeze()
 }
 
-pub async fn flv_stream(State(state): State<FlvState>) -> impl IntoResponse {
+pub async fn flv_stream_impl(state: FlvState) -> impl IntoResponse {
     let data = state.get_data().await;
     let mut response = Vec::new();
     response.extend_from_slice(&build_flv_header());
@@ -77,7 +73,10 @@ pub async fn flv_stream(State(state): State<FlvState>) -> impl IntoResponse {
 
     (
         StatusCode::OK,
-        [("content-type", "video/x-flv"), ("cache-control", "no-cache")],
+        [
+            ("content-type", "video/x-flv"),
+            ("cache-control", "no-cache"),
+        ],
         response,
     )
 }
@@ -143,7 +142,9 @@ mod tests {
     #[test]
     fn test_flv_tag_timestamp_encoding() {
         let tag = build_flv_tag(0x09, 0x01020304, &[0xAA]);
-        assert_eq!(tag[7], 0x04);
-        assert_eq!(tag[4], 0x01);
+        assert_eq!(tag[4], 0x02); // timestamp >> 16
+        assert_eq!(tag[5], 0x03); // timestamp >> 8
+        assert_eq!(tag[6], 0x04); // timestamp & 0xFF
+        assert_eq!(tag[7], 0x01); // timestamp >> 24
     }
 }

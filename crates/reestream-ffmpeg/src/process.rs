@@ -15,7 +15,11 @@ pub struct FfmpegProcess {
 impl FfmpegProcess {
     pub fn spawn(cmd: &FfmpegCommand) -> Result<Self, FfmpegError> {
         let args = cmd.build_args();
-        info!("Spawning FFmpeg: {} {}", cmd.ffmpeg_path.display(), args.join(" "));
+        info!(
+            "Spawning FFmpeg: {} {}",
+            cmd.ffmpeg_path.display(),
+            args.join(" ")
+        );
 
         let mut command = Command::new(&cmd.ffmpeg_path);
         command.args(&args);
@@ -150,7 +154,10 @@ impl FfmpegSupervisor {
 
             restarts += 1;
             if restarts > self.max_restarts {
-                error!("FFmpeg exceeded max restarts ({}), giving up", self.max_restarts);
+                error!(
+                    "FFmpeg exceeded max restarts ({}), giving up",
+                    self.max_restarts
+                );
                 return Err(FfmpegError::ProcessFailed {
                     exit_code,
                     stderr: "Max restarts exceeded".into(),
@@ -174,12 +181,10 @@ mod tests {
 
     #[test]
     fn test_supervisor_config() {
-        let supervisor = FfmpegSupervisor::new(
-            PathBuf::from("ffmpeg"),
-            vec!["-i".into(), "test".into()],
-        )
-        .max_restarts(3)
-        .restart_delay(1000);
+        let supervisor =
+            FfmpegSupervisor::new(PathBuf::from("ffmpeg"), vec!["-i".into(), "test".into()])
+                .max_restarts(3)
+                .restart_delay(1000);
 
         assert_eq!(supervisor.max_restarts, 3);
         assert_eq!(supervisor.restart_delay_ms, 1000);
@@ -187,20 +192,14 @@ mod tests {
 
     #[test]
     fn test_supervisor_default_config() {
-        let supervisor = FfmpegSupervisor::new(
-            PathBuf::from("ffmpeg"),
-            vec![],
-        );
+        let supervisor = FfmpegSupervisor::new(PathBuf::from("ffmpeg"), vec![]);
         assert_eq!(supervisor.max_restarts, 5);
         assert_eq!(supervisor.restart_delay_ms, 2000);
     }
 
     #[tokio::test]
     async fn test_process_spawn_nonexistent() {
-        let cmd = FfmpegCommand::new(
-            PathBuf::from("/nonexistent/ffmpeg"),
-            InputSource::Pipe,
-        );
+        let cmd = FfmpegCommand::new(PathBuf::from("/nonexistent/ffmpeg"), InputSource::Pipe);
         let result = FfmpegProcess::spawn(&cmd);
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
@@ -209,11 +208,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_supervisor_run_nonexistent() {
-        let supervisor = FfmpegSupervisor::new(
-            PathBuf::from("/nonexistent/ffmpeg"),
-            vec![],
-        )
-        .max_restarts(0);
+        let supervisor =
+            FfmpegSupervisor::new(PathBuf::from("/nonexistent/ffmpeg"), vec![]).max_restarts(0);
         let result = supervisor.run_with_restart().await;
         assert!(result.is_err());
     }

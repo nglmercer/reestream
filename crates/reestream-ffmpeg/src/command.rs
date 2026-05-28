@@ -77,7 +77,9 @@ impl FfmpegCommand {
 
     pub fn passthrough_to_rtmp(self, url: &str) -> Self {
         self.add_output(Output {
-            destination: OutputDestination::Rtmp { url: url.to_string() },
+            destination: OutputDestination::Rtmp {
+                url: url.to_string(),
+            },
             codec_args: vec!["-c", "copy"].into_iter().map(String::from).collect(),
             format_args: vec!["-f", "flv"].into_iter().map(String::from).collect(),
         })
@@ -91,10 +93,14 @@ impl FfmpegCommand {
             },
             codec_args: vec!["-c", "copy"].into_iter().map(String::from).collect(),
             format_args: vec![
-                "-f", "hls",
-                "-hls_time", "2",
-                "-hls_list_size", "10",
-                "-hls_flags", "delete_segments",
+                "-f",
+                "hls",
+                "-hls_time",
+                "2",
+                "-hls_list_size",
+                "10",
+                "-hls_flags",
+                "delete_segments",
             ]
             .into_iter()
             .map(String::from)
@@ -112,23 +118,26 @@ impl FfmpegCommand {
         })
     }
 
-    pub fn transcode(
-        self,
-        output: OutputDestination,
-        resolution: &str,
-        bitrate: &str,
-    ) -> Self {
+    pub fn transcode(self, output: OutputDestination, resolution: &str, bitrate: &str) -> Self {
         self.add_output(Output {
             destination: output,
             codec_args: vec![
-                "-c:v", "libx264",
-                "-preset", "veryfast",
-                "-b:v", bitrate,
-                "-maxrate", bitrate,
-                "-bufsize", bitrate,
-                "-vf", &format!("scale={resolution}"),
-                "-c:a", "aac",
-                "-b:a", "128k",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-b:v",
+                bitrate,
+                "-maxrate",
+                bitrate,
+                "-bufsize",
+                bitrate,
+                "-vf",
+                &format!("scale={resolution}"),
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
             ]
             .into_iter()
             .map(String::from)
@@ -165,12 +174,7 @@ impl FfmpegCommand {
         // Input
         match &self.input {
             InputSource::Rtmp { url } => {
-                args.extend([
-                    "-listen".into(),
-                    "1".into(),
-                    "-i".into(),
-                    url.clone(),
-                ]);
+                args.extend(["-listen".into(), "1".into(), "-i".into(), url.clone()]);
             }
             InputSource::File { path } => {
                 args.extend(["-i".into(), path.to_string_lossy().to_string()]);

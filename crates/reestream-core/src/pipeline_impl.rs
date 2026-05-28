@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tracing::info;
 use uuid::Uuid;
 
@@ -191,7 +191,10 @@ impl StreamPipeline for FilePipeline {
     }
 
     async fn start(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        info!("Starting file pipeline: {} from {}", self.name, self.file_path);
+        info!(
+            "Starting file pipeline: {} from {}",
+            self.name, self.file_path
+        );
         self.status = PipelineStatus::Running;
         self.start_time = Some(std::time::Instant::now());
         let _ = self.event_tx.send(PipelineEvent::Started).await;
@@ -278,7 +281,10 @@ impl PipelineManager for DefaultPipelineManager {
         Ok(id)
     }
 
-    async fn remove_pipeline(&self, id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn remove_pipeline(
+        &self,
+        id: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut pipelines = self.pipelines.write().await;
         if let Some(mut pipeline) = pipelines.remove(id) {
             pipeline.stop().await?;
@@ -399,11 +405,7 @@ mod tests {
     async fn test_remove_pipeline() {
         let (manager, _rx) = DefaultPipelineManager::new();
         let id = manager
-            .create_pipeline(
-                "test".into(),
-                "rtmp://input".into(),
-                vec![],
-            )
+            .create_pipeline("test".into(), "rtmp://input".into(), vec![])
             .await
             .unwrap();
         assert!(manager.remove_pipeline(&id).await.is_ok());
@@ -419,12 +421,7 @@ mod tests {
     #[tokio::test]
     async fn test_rtmp_pipeline_lifecycle() {
         let (tx, _rx) = mpsc::channel(10);
-        let mut pipeline = RtmpPipeline::new(
-            "test".into(),
-            "rtmp://input".into(),
-            vec![],
-            tx,
-        );
+        let mut pipeline = RtmpPipeline::new("test".into(), "rtmp://input".into(), vec![], tx);
         assert_eq!(pipeline.status(), PipelineStatus::Idle);
         pipeline.start().await.unwrap();
         assert_eq!(pipeline.status(), PipelineStatus::Running);
@@ -435,12 +432,7 @@ mod tests {
     #[tokio::test]
     async fn test_pipeline_stats() {
         let (tx, _rx) = mpsc::channel(10);
-        let mut pipeline = RtmpPipeline::new(
-            "test".into(),
-            "rtmp://input".into(),
-            vec![],
-            tx,
-        );
+        let mut pipeline = RtmpPipeline::new("test".into(), "rtmp://input".into(), vec![], tx);
         pipeline.start().await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         let stats = pipeline.stats();

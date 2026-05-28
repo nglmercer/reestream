@@ -116,7 +116,11 @@ impl WebhookSender {
     }
 }
 
-pub fn create_payload(event: WebhookEvent, stream_id: String, data: serde_json::Value) -> WebhookPayload {
+pub fn create_payload(
+    event: WebhookEvent,
+    stream_id: String,
+    data: serde_json::Value,
+) -> WebhookPayload {
     WebhookPayload {
         event,
         stream_id,

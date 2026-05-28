@@ -213,7 +213,12 @@ mod tests {
         assert_eq!(resolver.bin_dir(), PathBuf::from("/tmp/reestream/bin"));
 
         if cfg!(target_os = "windows") {
-            assert!(resolver.ffmpeg_path().to_string_lossy().contains("ffmpeg.exe"));
+            assert!(
+                resolver
+                    .ffmpeg_path()
+                    .to_string_lossy()
+                    .contains("ffmpeg.exe")
+            );
         } else {
             assert!(resolver.ffmpeg_path().to_string_lossy().contains("ffmpeg"));
             assert!(!resolver.ffmpeg_path().to_string_lossy().contains(".exe"));

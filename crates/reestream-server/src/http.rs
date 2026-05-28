@@ -127,24 +127,19 @@ async fn add_stream(
     (StatusCode::CREATED, axum::Json(ApiResponse::ok(id)))
 }
 
-async fn remove_stream(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+async fn remove_stream(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
     if state.stream_manager.remove_stream(&id).await {
-        axum::Json(ApiResponse::ok("removed"))
+        (StatusCode::OK, axum::Json(ApiResponse::ok("removed"))).into_response()
     } else {
         (
             StatusCode::NOT_FOUND,
             axum::Json(ApiResponse::err("stream not found")),
         )
+            .into_response()
     }
 }
 
-async fn stream_stats(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+async fn stream_stats(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
     let streams = state.stream_manager.get_streams().await;
     if let Some(stream) = streams.iter().find(|s| s.id == id) {
         let uptime = stream.started_at.map_or(0, |start| {
@@ -181,9 +176,7 @@ async fn get_config() -> impl IntoResponse {
     axum::Json(ApiResponse::ok(resp))
 }
 
-async fn update_config(
-    axum::Json(_req): axum::Json<UpdateConfigRequest>,
-) -> impl IntoResponse {
+async fn update_config(axum::Json(_req): axum::Json<UpdateConfigRequest>) -> impl IntoResponse {
     axum::Json(ApiResponse::ok("config updated"))
 }
 
@@ -213,12 +206,13 @@ async fn remove_platform(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     if state.stream_manager.remove_platform(&id).await {
-        axum::Json(ApiResponse::ok("removed"))
+        (StatusCode::OK, axum::Json(ApiResponse::ok("removed"))).into_response()
     } else {
         (
             StatusCode::NOT_FOUND,
             axum::Json(ApiResponse::err("platform not found")),
         )
+            .into_response()
     }
 }
 
@@ -228,16 +222,14 @@ async fn toggle_platform(
 ) -> impl IntoResponse {
     let platforms = state.stream_manager.get_platforms().await;
     if let Some(p) = platforms.iter().find(|p| p.id == id) {
-        state
-            .stream_manager
-            .toggle_platform(&id, !p.enabled)
-            .await;
-        axum::Json(ApiResponse::ok("toggled"))
+        state.stream_manager.toggle_platform(&id, !p.enabled).await;
+        (StatusCode::OK, axum::Json(ApiResponse::ok("toggled"))).into_response()
     } else {
         (
             StatusCode::NOT_FOUND,
             axum::Json(ApiResponse::err("platform not found")),
         )
+            .into_response()
     }
 }
 
@@ -260,17 +252,16 @@ async fn hls_segment(
         let segment_dir = &state.hls_segmenter.config().segment_dir;
         let path = segment_dir.join(&filename);
         match tokio::fs::read(&path).await {
-            Ok(data) => (
-                StatusCode::OK,
-                [("content-type", "video/mp2t")],
-                data,
-            )
-                .into_response(),
+            Ok(data) => (StatusCode::OK, [("content-type", "video/mp2t")], data).into_response(),
             Err(_) => StatusCode::NOT_FOUND.into_response(),
         }
     } else {
         StatusCode::NOT_FOUND.into_response()
     }
+}
+
+async fn flv_stream(State(state): State<AppState>) -> impl IntoResponse {
+    flv::flv_stream_impl(state.flv_state).await
 }
 
 async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
@@ -314,8 +305,10 @@ async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
 pub fn create_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
-        .route("/", get(dashboard::serve_dashboard))
-        .route("/dashboard", get(dashboard::serve_dashboard))
+        .route("/", get(dashboard::serve_index))
+        .route("/dashboard", get(dashboard::serve_index))
+        .route("/assets/{*path}", get(dashboard::serve_asset))
+        .route("/favicon.svg", get(dashboard::serve_asset))
         .route("/api/status", get(status))
         .route("/api/streams", get(list_streams).post(add_stream))
         .route("/api/streams/:id", delete(remove_stream))
@@ -327,7 +320,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/platforms/:id/toggle", put(toggle_platform))
         .route("/stream.m3u8", get(hls_playlist))
         .route("/hls/:filename", get(hls_segment))
-        .route("/stream.flv", get(flv::flv_stream))
+        .route("/stream.flv", get(flv_stream))
         .route("/metrics", get(metrics))
         .layer(CorsLayer::permissive())
         .with_state(state)

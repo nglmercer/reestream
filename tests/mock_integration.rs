@@ -73,7 +73,10 @@ async fn test_mock_client_disconnect() {
     let addr = server.addr;
 
     let server_handle = tokio::spawn(async move {
-        let mut session = server.accept_with_timeout(Duration::from_secs(2)).await.unwrap();
+        let mut session = server
+            .accept_with_timeout(Duration::from_secs(2))
+            .await
+            .unwrap();
         session.perform_handshake().await
     });
 

@@ -21,9 +21,8 @@ async fn test_full_rtmp_handshake() {
     client_stream.write_all(&c0_c1).await.unwrap();
 
     // Server processes handshake in background
-    let server_handle = tokio::spawn(async move {
-        handshake_and_create_server_session(&mut server_stream).await
-    });
+    let server_handle =
+        tokio::spawn(async move { handshake_and_create_server_session(&mut server_stream).await });
 
     // Client reads server response and completes handshake
     let mut buf = [0u8; 4096];
@@ -86,10 +85,7 @@ async fn test_handshake_with_garbage_data() {
     let (mut server_stream, mut client_stream, _listener) = create_server_client_pair().await;
 
     // Send garbage instead of valid RTMP handshake
-    client_stream
-        .write_all(&[0xFF; 1537])
-        .await
-        .unwrap();
+    client_stream.write_all(&[0xFF; 1537]).await.unwrap();
 
     // Server should handle gracefully (error or hang, but not crash)
     let server_handle = tokio::spawn(async move {
@@ -130,9 +126,8 @@ async fn test_handshake_preserves_remaining_bytes() {
     let c0_c1 = client_hs.generate_outbound_p0_and_p1().unwrap();
     client_stream.write_all(&c0_c1).await.unwrap();
 
-    let server_handle = tokio::spawn(async move {
-        handshake_and_create_server_session(&mut server_stream).await
-    });
+    let server_handle =
+        tokio::spawn(async move { handshake_and_create_server_session(&mut server_stream).await });
 
     // Complete handshake from client side
     let mut buf = [0u8; 4096];

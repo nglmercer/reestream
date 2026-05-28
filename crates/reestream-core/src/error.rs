@@ -102,8 +102,7 @@ mod tests {
 
     #[test]
     fn test_error_trait_implemented() {
-        let err: Box<dyn std::error::Error> =
-            Box::new(RelayError::Handshake("test".into()));
+        let err: Box<dyn std::error::Error> = Box::new(RelayError::Handshake("test".into()));
         assert_eq!(err.to_string(), "Handshake error: test");
     }
 

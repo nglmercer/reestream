@@ -114,7 +114,9 @@ mod tests {
     #[tokio::test]
     async fn test_add_and_get_streams() {
         let manager = StreamManager::new();
-        let id = manager.add_stream("test".into(), "rtmp://input".into()).await;
+        let id = manager
+            .add_stream("test".into(), "rtmp://input".into())
+            .await;
         let streams = manager.get_streams().await;
         assert_eq!(streams.len(), 1);
         assert_eq!(streams[0].id, id);
@@ -124,7 +126,9 @@ mod tests {
     #[tokio::test]
     async fn test_remove_stream() {
         let manager = StreamManager::new();
-        let id = manager.add_stream("test".into(), "rtmp://input".into()).await;
+        let id = manager
+            .add_stream("test".into(), "rtmp://input".into())
+            .await;
         assert!(manager.remove_stream(&id).await);
         assert!(manager.get_streams().await.is_empty());
     }
@@ -138,7 +142,9 @@ mod tests {
     #[tokio::test]
     async fn test_update_status() {
         let manager = StreamManager::new();
-        let id = manager.add_stream("test".into(), "rtmp://input".into()).await;
+        let id = manager
+            .add_stream("test".into(), "rtmp://input".into())
+            .await;
         manager.update_status(&id, StreamStatus::Live).await;
         let streams = manager.get_streams().await;
         assert_eq!(streams[0].status, StreamStatus::Live);

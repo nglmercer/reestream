@@ -54,9 +54,7 @@ async fn test_stress_concurrent_connections_50() {
 
     let mut client_handles = Vec::new();
     for _ in 0..50 {
-        client_handles.push(tokio::spawn(async move {
-            TcpStream::connect(addr).await
-        }));
+        client_handles.push(tokio::spawn(async move { TcpStream::connect(addr).await }));
     }
 
     for handle in client_handles {
@@ -204,9 +202,13 @@ async fn test_stress_concurrent_handshake_attempts() {
         let mut buf = [0u8; 4096];
         loop {
             let n = client.read(&mut buf).await.unwrap();
-            if n == 0 { break; }
+            if n == 0 {
+                break;
+            }
             match hs.process_bytes(&buf[..n]).unwrap() {
-                rml_rtmp::handshake::HandshakeProcessResult::Completed { response_bytes, .. } => {
+                rml_rtmp::handshake::HandshakeProcessResult::Completed {
+                    response_bytes, ..
+                } => {
                     if !response_bytes.is_empty() {
                         client.write_all(&response_bytes).await.unwrap();
                     }

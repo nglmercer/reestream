@@ -98,7 +98,9 @@ pub struct MockRtmpClient {
 }
 
 impl MockRtmpClient {
-    pub async fn connect(addr: std::net::SocketAddr) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn connect(
+        addr: std::net::SocketAddr,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let stream = TcpStream::connect(addr).await?;
         stream.set_nodelay(true)?;
         Ok(Self {
@@ -107,7 +109,9 @@ impl MockRtmpClient {
         })
     }
 
-    pub async fn perform_handshake(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn perform_handshake(
+        &mut self,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut hs = Handshake::new(PeerType::Client);
         let c0_c1 = hs.generate_outbound_p0_and_p1()?;
         self.stream.write_all(&c0_c1).await?;
@@ -166,7 +170,8 @@ impl MockRtmpClient {
         stream_key: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if let Some(session) = &mut self.session {
-            let result = session.request_publishing(stream_key.to_string(), PublishRequestType::Live)?;
+            let result =
+                session.request_publishing(stream_key.to_string(), PublishRequestType::Live)?;
             if let ClientSessionResult::OutboundResponse(packet) = result {
                 self.stream.write_all(&packet.bytes).await?;
             }
@@ -174,9 +179,13 @@ impl MockRtmpClient {
         Ok(())
     }
 
-    pub async fn send_video_data(&mut self, data: Bytes) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn send_video_data(
+        &mut self,
+        data: Bytes,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if let Some(session) = &mut self.session {
-            let result = session.publish_video_data(data, rml_rtmp::time::RtmpTimestamp::new(0), true)?;
+            let result =
+                session.publish_video_data(data, rml_rtmp::time::RtmpTimestamp::new(0), true)?;
             if let ClientSessionResult::OutboundResponse(packet) = result {
                 self.stream.write_all(&packet.bytes).await?;
             }
@@ -184,9 +193,13 @@ impl MockRtmpClient {
         Ok(())
     }
 
-    pub async fn send_audio_data(&mut self, data: Bytes) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn send_audio_data(
+        &mut self,
+        data: Bytes,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if let Some(session) = &mut self.session {
-            let result = session.publish_audio_data(data, rml_rtmp::time::RtmpTimestamp::new(0), true)?;
+            let result =
+                session.publish_audio_data(data, rml_rtmp::time::RtmpTimestamp::new(0), true)?;
             if let ClientSessionResult::OutboundResponse(packet) = result {
                 self.stream.write_all(&packet.bytes).await?;
             }

@@ -106,7 +106,10 @@ async fn test_reconnection_timeout() {
 
     // Simulate timeout waiting for reconnection
     let result = tokio::time::timeout(Duration::from_millis(100), rx.recv()).await;
-    assert!(result.is_err(), "Should timeout when no reconnection happens");
+    assert!(
+        result.is_err(),
+        "Should timeout when no reconnection happens"
+    );
 
     // Now send reconnection
     tx.send(()).await.unwrap();

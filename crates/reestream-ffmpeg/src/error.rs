@@ -80,8 +80,7 @@ mod tests {
 
     #[test]
     fn test_error_trait() {
-        let err: Box<dyn std::error::Error> =
-            Box::new(FfmpegError::InvalidArgument("bad".into()));
+        let err: Box<dyn std::error::Error> = Box::new(FfmpegError::InvalidArgument("bad".into()));
         assert!(err.to_string().contains("Invalid"));
     }
 }

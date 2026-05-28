@@ -29,8 +29,8 @@ impl SrtListener {
         let bind_addr = format!("{}:{}", self.config.listen_addr, self.config.listen_port);
         info!("SRT listener starting on {}", bind_addr);
 
-        let mut builder = SrtSocket::builder()
-            .latency(Duration::from_millis(self.config.latency_ms as u64));
+        let mut builder =
+            SrtSocket::builder().latency(Duration::from_millis(self.config.latency_ms as u64));
 
         if let Some(ref pass) = self.config.passphrase {
             let key_len = self.config.pbkey_len.unwrap_or(16) as u16;

@@ -418,7 +418,9 @@ mod tests {
 
     #[test]
     fn test_url_host_extraction_rtmps() {
-        let url: Url = "rtmps://edge-upload.instagram.com:443/rtmp/".parse().unwrap();
+        let url: Url = "rtmps://edge-upload.instagram.com:443/rtmp/"
+            .parse()
+            .unwrap();
         assert_eq!(url.host_str(), Some("edge-upload.instagram.com"));
         assert_eq!(url.port(), Some(443));
         assert_eq!(url.scheme(), "rtmps");

@@ -1,0 +1,56 @@
+import type {
+  ApiResponse,
+  ServerStatus,
+  StreamInfo,
+  Platform,
+  AddStreamRequest,
+  AddPlatformRequest,
+  ConfigResponse,
+} from './types';
+
+const BASE = '';
+
+async function request<T>(path: string, init?: RequestInit): Promise<ApiResponse<T>> {
+  const res = await fetch(`${BASE}${path}`, {
+    headers: { 'Content-Type': 'application/json' },
+    ...init,
+  });
+  return res.json() as Promise<ApiResponse<T>>;
+}
+
+export const api = {
+  getStatus: () => request<ServerStatus>('/api/status'),
+
+  getStreams: () => request<StreamInfo[]>('/api/streams'),
+
+  addStream: (req: AddStreamRequest) =>
+    request<string>('/api/streams', {
+      method: 'POST',
+      body: JSON.stringify(req),
+    }),
+
+  removeStream: (id: string) =>
+    request<string>(`/api/streams/${id}`, { method: 'DELETE' }),
+
+  getStreamStats: (id: string) =>
+    request<StreamInfo>(`/api/streams/${id}/stats`),
+
+  getPlatforms: () => request<Platform[]>('/api/platforms'),
+
+  addPlatform: (req: AddPlatformRequest) =>
+    request<string>('/api/platforms', {
+      method: 'POST',
+      body: JSON.stringify(req),
+    }),
+
+  removePlatform: (id: string) =>
+    request<string>(`/api/platforms/${id}`, { method: 'DELETE' }),
+
+  togglePlatform: (id: string) =>
+    request<string>(`/api/platforms/${id}/toggle`, { method: 'PUT' }),
+
+  getConfig: () => request<ConfigResponse>('/api/config'),
+
+  reloadConfig: () =>
+    request<string>('/api/config/reload', { method: 'POST' }),
+};

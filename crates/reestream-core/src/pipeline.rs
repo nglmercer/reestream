@@ -79,7 +79,10 @@ pub trait PipelineManager: Send + Sync {
         outputs: Vec<String>,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>>;
 
-    async fn remove_pipeline(&self, id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+    async fn remove_pipeline(
+        &self,
+        id: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
     async fn list_pipelines(&self) -> Vec<PipelineInfo>;
 

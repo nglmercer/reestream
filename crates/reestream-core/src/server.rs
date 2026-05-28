@@ -132,7 +132,9 @@ mod tests {
 
         // Server processes in background
         let server_handle =
-            tokio::spawn(async move { handshake_and_create_server_session(&mut server_stream).await });
+            tokio::spawn(
+                async move { handshake_and_create_server_session(&mut server_stream).await },
+            );
 
         // Client reads S0+S1+S2
         let mut buf = [0u8; 4096];

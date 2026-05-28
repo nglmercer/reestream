@@ -395,9 +395,7 @@ stream_key = "file-key""#
 
     #[test]
     fn test_config_builder_defaults() {
-        let config = ConfigBuilder::new()
-            .stream_key("test-key")
-            .build();
+        let config = ConfigBuilder::new().stream_key("test-key").build();
         assert_eq!(config.rtmp_addr, "0.0.0.0");
         assert_eq!(config.rtmp_port, 1935);
         assert_eq!(config.stream_key, "test-key");
@@ -447,13 +445,11 @@ stream_key = "file-key""#
 
     #[test]
     fn test_config_builder_validate_empty_platform_key() {
-        let builder = ConfigBuilder::new()
-            .stream_key("key")
-            .add_platform(
-                Url::parse("rtmp://twitch.tv/app").unwrap(),
-                "",
-                Orientation::Horizontal,
-            );
+        let builder = ConfigBuilder::new().stream_key("key").add_platform(
+            Url::parse("rtmp://twitch.tv/app").unwrap(),
+            "",
+            Orientation::Horizontal,
+        );
         assert!(builder.validate().is_err());
     }
 
