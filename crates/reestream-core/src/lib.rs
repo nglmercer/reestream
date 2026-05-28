@@ -5,6 +5,8 @@ pub mod hardening;
 pub mod pipeline;
 pub mod pipeline_impl;
 pub mod provider;
+pub mod rtsp;
+pub mod security;
 pub mod server;
 pub mod setup;
 

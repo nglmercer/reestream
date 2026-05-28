@@ -5,31 +5,76 @@
 | Metric | Value |
 |--------|-------|
 | Crates | 5 (core, ffmpeg, server, srt, root) |
-| Rust source files | 28 |
-| Rust lines of code | ~6,000 |
-| Tests | 294 |
+| Rust source files | 36 |
+| Rust lines of code | ~8,500 |
+| Tests | 320 |
 | API endpoints | 25 |
 | Feature flags | 8 |
 | Dashboard components | 10 |
 
 ### What's built
+
+**Core**
 - RTMP relay with multistream forwarding (RTMP/RTMPS)
 - SRT protocol (input listener, output sender, AES-128 encryption)
+- SRT bridge (SRT→RTMP→HLS pipeline with stats)
+- RTSP input support (TCP/UDP transport, FFmpeg restream)
+- TLS/RTMPS support with reconnection logic
+- Configuration via TOML with ConfigBuilder pattern
+- Concrete pipeline implementations (RTMP, SRT, File)
+
+**FFmpeg**
+- Binary resolver (platform URL mapping, download, checksum)
+- Command builder (passthrough, HLS, transcode, HW accel)
+- Process supervisor with auto-restart and backoff
+- Hardware acceleration (VAAPI, NVENC, VideoToolbox, MMAL)
+- Stream processing (transcode profiles, resize, watermark, thumbnail)
+- Recording (FFmpeg-based, MP4/FLV/MKV/TS, scheduled, rotation)
+
+**Server**
+- HTTP server using axum
 - HLS segmenter with live `.m3u8` playlist
 - HTTP-FLV live streaming (`/stream.flv`)
-- FFmpeg integration (binary resolver, command builder, supervisor, download, HW accel)
-- REST API (25 endpoints: streams, platforms, config, setup, recordings, metrics)
-- Web dashboard (Vite 8 + Preact + TypeScript + Tailwind 4 + flv.js)
-- Video preview (FLV/HLS toggle, latency monitor)
-- First-time setup (CLI `--setup` wizard + dashboard web wizard)
-- Settings panel (stream key reveal/reset, server endpoints, OBS guide)
-- Platform management (add/remove with presets: Twitch, YouTube, Facebook, Instagram, Kick, TikTok)
-- Stream recording (FFmpeg-based, MP4/FLV/MKV/TS, dashboard controls)
+- REST API (25 endpoints)
+- Prometheus metrics (uptime, streams, viewers, bitrate)
 - Webhook notifications (stream start/end/error, viewer connect/disconnect)
-- Structured JSON logging (`--json-log`, `--log-level`)
-- Production hardening (graceful shutdown, rate limiting, connection pool, signal handlers, config watcher)
-- Prometheus metrics (uptime, streams, viewers, per-stream status/bitrate)
-- Concrete pipeline implementations (RTMP, SRT, File)
+- DVR/timeshift buffer
+- WebRTC config (ICE servers)
+- Adaptive bitrate (ABR) for HLS (master playlist generation)
+
+**Dashboard**
+- Vite 8 + Preact + TypeScript + Tailwind CSS 4
+- Video preview (FLV/HLS player with flv.js, latency monitor)
+- First-time setup wizard (CLI `--setup` + web wizard)
+- Settings panel (stream key reveal/reset, server endpoints, OBS guide)
+- Platform management (add/remove with presets)
+- Recording controls (start/stop/delete)
+- Stream and platform tables
+- Log viewer
+- Auto-refresh polling
+
+**Security**
+- API token authentication
+- IP allowlist/blocklist (CIDR support)
+- Per-platform stream key validation
+- Rate limiting per IP
+- HTTPS-only mode
+
+**Production**
+- Graceful shutdown (drain in-flight, configurable timeout)
+- Rate limiting per connection
+- Connection pool (max concurrent, RAII guard)
+- Max viewer limit per stream
+- Bandwidth limiting per stream
+- Config file watcher (hot-reload)
+- Signal handlers (SIGTERM, SIGINT, SIGHUP)
+- Fuzz tests (RTMP packet parsing, config, FLV tags, IP matching)
+- Stress tests (50 concurrent, rapid connect/disconnect, contention)
+- ACME/Let's Encrypt config (auto-TLS)
+
+**Structured Logging**
+- JSON output (`--json-log`)
+- Configurable level (`--log-level`)
 
 ---
 
@@ -38,13 +83,13 @@
 ```toml
 [features]
 default = ["core"]
-core = ["dep:reestream-core"]       # RTMP relay + multistream
-hls = ["dep:reestream-server", "reestream-server/hls"]  # HLS/HTTP server
-api = ["dep:reestream-server", "reestream-server/api"]  # REST API
-srt = ["dep:reestream-srt"]         # SRT protocol
-ffmpeg = ["dep:reestream-ffmpeg"]    # FFmpeg process management
-preview = ["hls"]                    # Stream preview
-webhook = ["dep:reestream-server", "reestream-server/api"]  # Webhooks
+core = ["dep:reestream-core"]
+hls = ["dep:reestream-server", "reestream-server/hls"]
+api = ["dep:reestream-server", "reestream-server/api"]
+srt = ["dep:reestream-srt"]
+ffmpeg = ["dep:reestream-ffmpeg"]
+preview = ["hls"]
+webhook = ["dep:reestream-server", "reestream-server/api"]
 all = ["hls", "api", "ffmpeg", "preview", "srt", "webhook"]
 ```
 
@@ -56,61 +101,19 @@ cargo build --release --features all
 
 ## TODO: Future Features
 
-### 1. SRT Bridge (runtime wiring)
-- [ ] SRT input → RTMP relay → HLS output pipeline
-- [ ] Auto-detect SRT publish and route to RTMP clients
-
-### 2. Stream Processing
-- [ ] Transcode via FFmpeg (resolution/bitrate/codec conversion)
-- [ ] Resize / scale filters
-- [ ] Watermark overlay (image or text)
-- [ ] Thumbnail / preview frame generation
-- [ ] Input sources: RTSP, USB capture
-
-### 3. Web UI Enhancements
-- [ ] i18n (internationalization support)
-- [ ] Stream analytics charts (bitrate, viewers over time)
+### 1. Web UI Enhancements
+- [ ] i18n (internationalization)
+- [ ] Stream analytics charts (bitrate/viewers over time)
 - [ ] Dark/light theme toggle
 - [ ] Keyboard shortcuts
 - [ ] Mobile-responsive improvements
 
-### 4. Multiplatform Distribution
-- [ ] macOS builds (x86_64, aarch64)
-- [ ] Windows builds (x86_64)
-- [ ] Docker images: `reestream/core`, `reestream/full`, `reestream/cuda`
-- [ ] GitHub Actions CI/CD pipeline
-
-### 5. Production Hardening
-- [ ] Let's Encrypt auto-TLS (ACME integration)
-- [ ] Fuzz testing for RTMP packet parsing
-- [ ] Stress tests with 100+ concurrent streams
-- [ ] Connection draining on config reload
-
-### 6. Advanced Recording
-- [ ] Scheduled recordings (start/stop at specific times)
-- [ ] Recording rotation (auto-split by duration or size)
-- [ ] Recording upload to S3/R2/MinIO
-- [ ] Recording format conversion post-capture
-
-### 7. Advanced Streaming
-- [ ] RTSP input/output support
+### 2. Advanced Streaming
 - [ ] WebRTC output (low-latency viewer playback)
-- [ ] Adaptive bitrate (ABR) for HLS
-- [ ] DVR / timeshift (rewind live stream)
 - [ ] Multi-language audio track support
 
-### 8. Observability
-- [ ] OpenTelemetry tracing export
-- [ ] Grafana dashboard JSON template
-- [ ] Alerting webhooks (configurable thresholds)
-- [ ] Log file rotation and archival
-
-### 9. Security
-- [ ] RTMP stream key validation per-platform
-- [ ] IP allowlist/blocklist for publishing
-- [ ] Rate limiting per stream key
-- [ ] HTTPS for dashboard (auto-TLS or manual cert)
-- [ ] API authentication (token-based)
+### 3. Advanced Recording
+- [ ] Recording upload to S3/R2/MinIO
 
 ---
 
@@ -169,13 +172,13 @@ Options:
 
 | Module | Tests |
 |--------|------:|
-| reestream-core | 131 |
-| reestream-ffmpeg | 23 |
+| reestream-core | 142 |
+| reestream-ffmpeg | 33 |
 | reestream-server | 51 |
-| reestream-srt | 23 |
+| reestream-srt | 27 |
 | reestream (root) | 10 |
-| integration tests | 56 |
-| **Total** | **294** |
+| integration tests | 57 |
+| **Total** | **320** |
 
 ---
 
@@ -194,6 +197,8 @@ reestream/
 │   │       ├── pipeline.rs         # StreamPipeline/PipelineManager traits
 │   │       ├── pipeline_impl.rs    # RTMP/SRT/File pipelines
 │   │       ├── provider.rs         # OAuth2 stream key provider
+│   │       ├── rtsp.rs             # RTSP input config and FFmpeg args
+│   │       ├── security.rs         # IP filter, API token, ACME config
 │   │       ├── server.rs           # RTMP handshake
 │   │       └── setup.rs            # First-run detection, CLI wizard, setup API
 │   ├── reestream-ffmpeg/
@@ -201,28 +206,36 @@ reestream/
 │   │       ├── command.rs          # Command builder
 │   │       ├── error.rs            # FfmpegError
 │   │       ├── process.rs          # Process wrapper, supervisor
+│   │       ├── processing.rs       # Transcode, watermark, thumbnail, resize
 │   │       └── resolver.rs         # Binary resolver, download
 │   ├── reestream-server/
 │   │   ├── static/                 # Compiled dashboard (rust-embed)
 │   │   └── src/
 │   │       ├── api.rs              # API types, route definitions
 │   │       ├── dashboard.rs        # Static file serving
+│   │       ├── dvr.rs              # DVR/timeshift buffer
 │   │       ├── flv.rs              # FLV container builder
 │   │       ├── hls.rs              # HLS segmenter
 │   │       ├── http.rs             # Axum router, all handlers
 │   │       ├── recording.rs        # FFmpeg recording manager
+│   │       ├── recording_ext.rs    # Scheduled, rotation, S3, format convert
 │   │       ├── stream.rs           # StreamManager CRUD
-│   │       └── webhook.rs          # Webhook sender
+│   │       ├── webhook.rs          # Webhook sender
+│   │       └── webrtc.rs           # WebRTC config, ABR, master playlist
 │   └── reestream-srt/
 │       └── src/
+│           ├── bridge.rs           # SRT→RTMP bridge with stats
 │           ├── config.rs           # SRT config
 │           ├── error.rs            # SrtError
 │           ├── listener.rs         # SRT input
 │           └── sender.rs           # SRT output
-├── dashboard/
+├── dashboard/                      # Vite 8 + Preact + TypeScript + Tailwind
 │   └── src/
 │       ├── api/                    # Type-safe API client
 │       ├── hooks/                  # usePolling, useVideoPlayer
 │       └── components/             # 10 components
-└── tests/                          # Integration tests
+└── tests/
+    ├── fuzz.rs                     # Property-based fuzz tests
+    ├── stress_heavy.rs             # Heavy stress tests
+    └── *.rs                        # 57 integration tests
 ```

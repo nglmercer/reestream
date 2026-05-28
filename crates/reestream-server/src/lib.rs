@@ -8,7 +8,10 @@ pub mod api;
 pub mod http;
 
 pub mod dashboard;
+pub mod dvr;
 pub mod flv;
 pub mod recording;
+pub mod recording_ext;
 pub mod stream;
 pub mod webhook;
+pub mod webrtc;
