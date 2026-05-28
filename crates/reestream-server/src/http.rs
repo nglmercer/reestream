@@ -13,7 +13,7 @@ use tracing::info;
 use crate::dashboard;
 use crate::flv::{self, FlvState};
 use crate::hls::HlsSegmenter;
-use crate::recording::{RecordingConfig, RecordingManager};
+use crate::recording::RecordingManager;
 use crate::stream::{StreamManager, StreamStatus};
 
 #[derive(Clone)]
@@ -358,11 +358,7 @@ async fn stop_recording(
 ) -> impl IntoResponse {
     match state.recording_manager.stop_recording(&id).await {
         Ok(()) => axum::Json(ApiResponse::ok("stopped")).into_response(),
-        Err(e) => (
-            StatusCode::NOT_FOUND,
-            axum::Json(ApiResponse::<()>::err(e)),
-        )
-            .into_response(),
+        Err(e) => (StatusCode::NOT_FOUND, axum::Json(ApiResponse::<()>::err(e))).into_response(),
     }
 }
 
@@ -372,11 +368,7 @@ async fn delete_recording(
 ) -> impl IntoResponse {
     match state.recording_manager.delete_recording(&id).await {
         Ok(()) => axum::Json(ApiResponse::ok("deleted")).into_response(),
-        Err(e) => (
-            StatusCode::NOT_FOUND,
-            axum::Json(ApiResponse::<()>::err(e)),
-        )
-            .into_response(),
+        Err(e) => (StatusCode::NOT_FOUND, axum::Json(ApiResponse::<()>::err(e))).into_response(),
     }
 }
 
@@ -500,6 +492,7 @@ pub async fn start_http_server(
 mod tests {
     use super::*;
     use crate::hls::HlsConfig;
+    use crate::recording::RecordingConfig;
 
     fn test_state() -> AppState {
         let hls_config = HlsConfig::default();

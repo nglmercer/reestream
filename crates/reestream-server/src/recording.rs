@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecordingConfig {
@@ -126,6 +126,8 @@ impl RecordingManager {
         let ffmpeg_args = self.build_ffmpeg_args(input_url, &path);
         let recordings = self.recordings.clone();
         let rec_id = id.clone();
+        let input_owned = input_url.to_string();
+        let path_owned = path.clone();
 
         tokio::spawn(async move {
             match tokio::process::Command::new("ffmpeg")
@@ -136,7 +138,11 @@ impl RecordingManager {
                 .spawn()
             {
                 Ok(mut child) => {
-                    info!("Recording started: {} -> {}", input_url, path.display());
+                    info!(
+                        "Recording started: {} -> {}",
+                        input_owned,
+                        path_owned.display()
+                    );
                     let status = child.wait().await;
                     let mut recs = recordings.write().await;
                     if let Some(rec) = recs.iter_mut().find(|r| r.id == rec_id) {
@@ -185,7 +191,12 @@ impl RecordingManager {
     }
 
     pub async fn get_recording(&self, id: &str) -> Option<RecordingInfo> {
-        self.recordings.read().await.iter().find(|r| r.id == id).cloned()
+        self.recordings
+            .read()
+            .await
+            .iter()
+            .find(|r| r.id == id)
+            .cloned()
     }
 
     pub async fn delete_recording(&self, id: &str) -> Result<(), String> {
@@ -203,7 +214,7 @@ impl RecordingManager {
         }
     }
 
-    fn build_ffmpeg_args(&self, input_url: &str, output_path: &PathBuf) -> Vec<String> {
+    fn build_ffmpeg_args(&self, input_url: &str, output_path: &std::path::Path) -> Vec<String> {
         let mut args = vec![
             "-i".to_string(),
             input_url.to_string(),
