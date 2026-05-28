@@ -1,0 +1,29 @@
+[package]
+name = "reestream-srt"
+version = "0.2.0"
+edition = "2024"
+authors = ["RustLangES contact@rustlang-es.org"]
+description = "SRT protocol support for reestream"
+license = "MIT OR Apache-2.0"
+
+[features]
+default = []
+
+[dependencies]
+bytes = "1.10"
+serde = { version = "1", features = ["derive"] }
+srt-tokio = "0.4"
+tokio = { version = "1", default-features = false, features = [
+    "io-util",
+    "macros",
+    "net",
+    "rt-multi-thread",
+    "sync",
+    "time",
+] }
+tracing = { version = "0.1", features = ["log"] }
+url = { version = "2.5", features = ["serde"] }
+futures = "0.3"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

@@ -3,6 +3,7 @@ members = [
     "crates/reestream-core",
     "crates/reestream-ffmpeg",
     "crates/reestream-server",
+    "crates/reestream-srt",
 ]
 resolver = "2"
 

@@ -3,18 +3,13 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub enum PipelineStatus {
+    #[default]
     Idle,
     Running,
     Error(String),
     Stopped,
-}
-
-impl Default for PipelineStatus {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 impl fmt::Display for PipelineStatus {
@@ -167,7 +162,7 @@ mod tests {
 
     #[test]
     fn test_pipeline_event_variants() {
-        let events = vec![
+        let events = [
             PipelineEvent::Started,
             PipelineEvent::Stopped,
             PipelineEvent::Error("test".into()),
