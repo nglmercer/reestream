@@ -10,6 +10,11 @@ use tracing_subscriber::EnvFilter;
 use reestream::client::handle_publisher;
 use reestream::config::Config;
 
+type StreamManagerPair = (
+    Option<Arc<dyn reestream::client::StreamRegistrar>>,
+    Option<Arc<dyn reestream::client::DataPublisher>>,
+);
+
 #[derive(clap::Parser)]
 struct Args {
     /// Define config.toml path
@@ -124,10 +129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create StreamManager and DataBus shared between HTTP server and RTMP handler
     #[cfg(any(feature = "hls", feature = "api"))]
-    let (stream_manager, data_bus): (
-        Option<Arc<reestream::http_server::stream::StreamManager>>,
-        Option<Arc<dyn reestream::client::DataPublisher>>,
-    ) = {
+    let (stream_manager, data_bus): StreamManagerPair = {
         let sm = Arc::new(reestream::http_server::stream::StreamManager::new());
         if let Some(ref config_platforms) = *platform {
             for cp in config_platforms {
@@ -255,10 +257,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     #[cfg(not(any(feature = "hls", feature = "api")))]
-    let (stream_manager, data_bus): (
-        Option<Arc<dyn reestream::client::StreamRegistrar>>,
-        Option<Arc<dyn reestream::client::DataPublisher>>,
-    ) = (None, None);
+    let (stream_manager, data_bus): StreamManagerPair = (None, None);
 
     if !stream_key.is_empty() {
         info!("Open http://localhost:8080 for the dashboard");
