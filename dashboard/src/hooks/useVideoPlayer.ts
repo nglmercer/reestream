@@ -1,5 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from 'preact/hooks';
 import type { RefObject } from 'preact';
+import { useLocale } from './useLocale';
 
 type PlayerType = 'flv' | 'hls' | 'native';
 
