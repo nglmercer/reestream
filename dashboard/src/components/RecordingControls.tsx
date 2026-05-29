@@ -84,7 +84,7 @@ export function RecordingControls({ addLog }: Props) {
   );
 
   const formatSize = (bytes: number): string => {
-    const units = t('recording.sizeUnits') as string[];
+    const units = [' B', ' KB', ' MB'];
     if (bytes < 1024) return `${bytes}${units[0]}`;
     if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)}${units[1]}`;
     return `${(bytes / 1048576).toFixed(1)}${units[2]}`;
