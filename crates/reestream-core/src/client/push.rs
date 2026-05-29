@@ -37,7 +37,6 @@ impl ClientStateWrapper {
         }
         self.prepublish_video_buffer.push_back((data, timestamp));
     }
-    #[allow(dead_code)]
     pub fn buffer_audio(&mut self, data: Bytes, timestamp: RtmpTimestamp) {
         if self.prepublish_audio_buffer.len() >= MAX_BUFFER_SIZE {
             self.prepublish_audio_buffer.pop_front();

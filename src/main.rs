@@ -194,6 +194,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         &packet.data,
                                     );
 
+                                    // Detect and store sequence headers for new FLV viewers
+                                    if packet.is_video && packet.data.len() > 1 && packet.data[0] == 0x17 && packet.data[1] == 0x00 {
+                                        flv.set_video_header(flv_tag.clone()).await;
+                                    } else if !packet.is_video && packet.data.len() > 1 && (packet.data[0] & 0xF0) == 0xA0 && packet.data[1] == 0x00 {
+                                        flv.set_audio_header(flv_tag.clone()).await;
+                                    }
+
                                     flv.push_data(flv_tag.clone()).await;
 
                                     if hls_tx.is_none() {

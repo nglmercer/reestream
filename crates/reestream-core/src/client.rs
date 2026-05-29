@@ -90,6 +90,11 @@ pub async fn handle_publisher(
         .collect();
     let mut push_clients: Vec<PushClient> = Vec::new();
 
+    // Cached sequence headers & metadata for passing to new/reconnected PushClients
+    let mut cached_video_header: Option<Bytes> = None;
+    let mut cached_audio_header: Option<Bytes> = None;
+    let mut cached_metadata: Option<rml_rtmp::sessions::StreamMetadata> = None;
+
     if !leftover.is_empty() {
         let results = server_session.handle_input(&leftover)?;
         for res in results {
@@ -134,7 +139,7 @@ pub async fn handle_publisher(
                                         continue;
                                     }
                                 };
-                                match timeout(Duration::from_secs(5), PushClient::connect_and_publish(&url_parsed, key, None, None, None, platform_id.clone())).await {
+                                match timeout(Duration::from_secs(5), PushClient::connect_and_publish(&url_parsed, key, cached_video_header.clone(), cached_audio_header.clone(), cached_metadata.clone(), platform_id.clone())).await {
                                     Ok(Ok(pc)) => {
                                         info!("Connected to newly enabled platform: {} (id={})", url, platform_id);
                                         push_clients.push(pc);
@@ -157,7 +162,7 @@ pub async fn handle_publisher(
                                     continue;
                                 }
                             };
-                            match timeout(Duration::from_secs(5), PushClient::connect_and_publish(&url_parsed, key, None, None, None, platform_id.clone())).await {
+                            match timeout(Duration::from_secs(5), PushClient::connect_and_publish(&url_parsed, key, cached_video_header.clone(), cached_audio_header.clone(), cached_metadata.clone(), platform_id.clone())).await {
                                 Ok(Ok(pc)) => {
                                     info!("Connected to new platform: {} (id={})", url, platform_id);
                                     push_clients.push(pc);
@@ -255,6 +260,9 @@ pub async fn handle_publisher(
                                 }
                             }
                             ServerSessionEvent::VideoDataReceived { data, timestamp, .. } => {
+                                if is_video_sequence_header(&data) {
+                                    cached_video_header = Some(data.clone());
+                                }
                                 // Publish to DataBus for HLS/FLV
                                 if let (Some(pubber), Some(sid)) = (&data_publisher, &registered_stream_id) {
                                     pubber.publish(sid, data.clone(), true, timestamp.value);
@@ -262,6 +270,9 @@ pub async fn handle_publisher(
                                 forward_to_push_clients(&mut push_clients, &reconnect_tx, data, timestamp, true, platforms.clone()).await;
                             }
                             ServerSessionEvent::AudioDataReceived { data, timestamp, .. } => {
+                                if is_audio_sequence_header(&data) {
+                                    cached_audio_header = Some(data.clone());
+                                }
                                 // Publish to DataBus for HLS/FLV
                                 if let (Some(pubber), Some(sid)) = (&data_publisher, &registered_stream_id) {
                                     pubber.publish(sid, data.clone(), false, timestamp.value);
@@ -269,6 +280,7 @@ pub async fn handle_publisher(
                                 forward_to_push_clients(&mut push_clients, &reconnect_tx, data, timestamp, false, platforms.clone()).await;
                             }
                             ServerSessionEvent::StreamMetadataChanged { metadata, .. } => {
+                                cached_metadata = Some(metadata.clone());
                                 for pc in &push_clients {
                                     let mut state = pc.client_state.write().await;
                                     state.prepublish_metadata = Some(metadata.clone());
@@ -393,6 +405,8 @@ async fn forward_to_push_clients(
             }
         } else if is_video {
             state.buffer_video(data.clone(), timestamp);
+        } else {
+            state.buffer_audio(data.clone(), timestamp);
         }
     }
 }

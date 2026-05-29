@@ -11,6 +11,8 @@ use tokio::sync::{RwLock, broadcast};
 pub struct FlvState {
     pub segments: Arc<RwLock<Vec<Bytes>>>,
     pub tx: broadcast::Sender<Bytes>,
+    pub video_header: Arc<RwLock<Option<Bytes>>>,
+    pub audio_header: Arc<RwLock<Option<Bytes>>>,
 }
 
 impl Default for FlvState {
@@ -19,6 +21,8 @@ impl Default for FlvState {
         Self {
             segments: Arc::new(RwLock::new(Vec::new())),
             tx,
+            video_header: Arc::new(RwLock::new(None)),
+            audio_header: Arc::new(RwLock::new(None)),
         }
     }
 }
@@ -37,12 +41,30 @@ impl FlvState {
         self.tx.subscribe()
     }
 
+    pub async fn set_video_header(&self, header: Bytes) {
+        *self.video_header.write().await = Some(header);
+    }
+
+    pub async fn set_audio_header(&self, header: Bytes) {
+        *self.audio_header.write().await = Some(header);
+    }
+
     pub async fn get_recent(&self) -> Vec<Bytes> {
         self.segments.read().await.clone()
     }
 
     pub async fn subscribe_with_recent(&self) -> (Vec<Bytes>, broadcast::Receiver<Bytes>) {
-        let recent = self.segments.read().await.clone();
+        let mut recent = Vec::new();
+
+        // Prepend sequence headers so new viewers can start decoding immediately
+        if let Some(ref h) = *self.video_header.read().await {
+            recent.push(h.clone());
+        }
+        if let Some(ref h) = *self.audio_header.read().await {
+            recent.push(h.clone());
+        }
+
+        recent.extend(self.segments.read().await.iter().cloned());
         let rx = self.tx.subscribe();
         (recent, rx)
     }
