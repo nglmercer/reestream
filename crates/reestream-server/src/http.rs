@@ -532,6 +532,32 @@ async fn delete_recording(
 }
 
 async fn hls_playlist(State(state): State<AppState>) -> impl IntoResponse {
+    // Try to read ffmpeg-generated playlist first
+    let segment_dir = &state.hls_segmenter.config().segment_dir;
+    let playlist_path = segment_dir.join("stream.m3u8");
+
+    if let Ok(playlist) = tokio::fs::read_to_string(&playlist_path).await {
+        // Rewrite segment paths to use /hls/ prefix
+        let rewritten = playlist
+            .lines()
+            .map(|line| {
+                if line.ends_with(".ts") && !line.starts_with('#') {
+                    format!("/hls/{}", line)
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        return (
+            StatusCode::OK,
+            [("content-type", "application/vnd.apple.mpegurl")],
+            rewritten,
+        );
+    }
+
+    // Fall back to in-memory segmenter
     let segments = state.hls_segmenter.get_segments().await;
     let playlist = state.hls_segmenter.generate_playlist(&segments, true);
     (
@@ -545,9 +571,19 @@ async fn hls_segment(
     State(state): State<AppState>,
     Path(filename): Path<String>,
 ) -> impl IntoResponse {
+    // Try ffmpeg-generated segments first
+    let segment_dir = &state.hls_segmenter.config().segment_dir;
+    let path = segment_dir.join(&filename);
+    if path.exists() {
+        match tokio::fs::read(&path).await {
+            Ok(data) => return (StatusCode::OK, [("content-type", "video/mp2t")], data).into_response(),
+            Err(_) => return StatusCode::NOT_FOUND.into_response(),
+        }
+    }
+
+    // Fall back to in-memory segmenter
     let segments = state.hls_segmenter.get_segments().await;
     if segments.iter().any(|s| s.filename == filename) {
-        let segment_dir = &state.hls_segmenter.config().segment_dir;
         let path = segment_dir.join(&filename);
         match tokio::fs::read(&path).await {
             Ok(data) => (StatusCode::OK, [("content-type", "video/mp2t")], data).into_response(),
@@ -741,5 +777,147 @@ mod tests {
         let json = serde_json::to_string(&stats).unwrap();
         assert!(json.contains("test-id"));
         assert!(json.contains("5000"));
+    }
+
+    #[tokio::test]
+    async fn test_hls_playlist_empty() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let state = test_state();
+        let app = create_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/stream.m3u8")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let playlist = String::from_utf8(body.to_vec()).unwrap();
+
+        // Should be a valid M3U8 playlist
+        assert!(playlist.contains("#EXTM3U"));
+        assert!(playlist.contains("#EXT-X-VERSION:3"));
+        assert!(playlist.contains("#EXT-X-TARGETDURATION:"));
+    }
+
+    #[tokio::test]
+    async fn test_hls_segment_not_found() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let state = test_state();
+        let app = create_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/hls/nonexistent.ts")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_flv_stream_returns_flv_content_type() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let state = test_state();
+        let app = create_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/stream.flv")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get("content-type").unwrap().to_str().unwrap(),
+            "video/x-flv"
+        );
+        assert_eq!(
+            response.headers().get("cache-control").unwrap().to_str().unwrap(),
+            "no-cache"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_api_streams_endpoint() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let state = test_state();
+        let app = create_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/streams")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["success"].as_bool().unwrap());
+        assert!(json["data"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_api_status_endpoint() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let state = test_state();
+        let app = create_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["success"].as_bool().unwrap());
+        assert!(json["data"]["version"].is_string());
     }
 }

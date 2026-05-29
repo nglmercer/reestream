@@ -165,4 +165,89 @@ mod tests {
         assert_eq!(tag[6], 0x04); // timestamp & 0xFF
         assert_eq!(tag[7], 0x01); // timestamp >> 24
     }
+
+    #[tokio::test]
+    async fn test_flv_stream_response_content_type() {
+        let state = FlvState::default();
+        let response = flv_stream_response(state);
+        let headers = response.headers();
+        assert_eq!(
+            headers.get("content-type").unwrap().to_str().unwrap(),
+            "video/x-flv"
+        );
+        assert_eq!(
+            headers.get("cache-control").unwrap().to_str().unwrap(),
+            "no-cache"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_flv_tag_wrapping_preserves_data() {
+        // Simulate what the DataBus→FlvState bridge does
+        let state = FlvState::default();
+
+        // Create a video sequence header (0x17 0x00 = AVC sequence header)
+        let video_data = vec![0x17, 0x00, 0x00, 0x00, 0x00, 0x01, 0x64, 0x00, 0x1E];
+        let tag = build_flv_tag(0x09, 1000, &video_data);
+
+        // Push the wrapped tag
+        state.push_data(tag.clone()).await;
+
+        let data = state.get_recent().await;
+        assert_eq!(data.len(), 1);
+
+        // Verify the tag structure
+        let tag_data = &data[0];
+        assert_eq!(tag_data[0], 0x09); // Video tag type
+        assert_eq!(tag_data[4], 0x00); // Timestamp byte 2 (1000 = 0x3E8)
+        assert_eq!(tag_data[5], 0x03); // Timestamp byte 1
+        assert_eq!(tag_data[6], 0xE8); // Timestamp byte 0
+
+        // Verify data size encoding
+        let data_size = ((tag_data[1] as u32) << 16)
+            | ((tag_data[2] as u32) << 8)
+            | (tag_data[3] as u32);
+        assert_eq!(data_size, video_data.len() as u32);
+    }
+
+    #[tokio::test]
+    async fn test_flv_stream_with_multiple_tags() {
+        let state = FlvState::default();
+
+        // Push video sequence header
+        let video_header = build_flv_tag(0x09, 0, &[0x17, 0x00, 0x00, 0x00, 0x00]);
+        state.push_data(video_header).await;
+
+        // Push audio sequence header
+        let audio_header = build_flv_tag(0x08, 0, &[0xAF, 0x00, 0x12, 0x10]);
+        state.push_data(audio_header).await;
+
+        // Push a video frame
+        let video_frame = build_flv_tag(0x09, 100, &[0x17, 0x01, 0x00, 0x00, 0x00]);
+        state.push_data(video_frame).await;
+
+        let data = state.get_recent().await;
+        assert_eq!(data.len(), 3);
+
+        // First tag should be video
+        assert_eq!(data[0][0], 0x09);
+        // Second tag should be audio
+        assert_eq!(data[1][0], 0x08);
+        // Third tag should be video
+        assert_eq!(data[2][0], 0x09);
+    }
+
+    #[tokio::test]
+    async fn test_flv_tag_prev_tag_size() {
+        let data = vec![0x17, 0x00, 0x00, 0x00, 0x00];
+        let tag = build_flv_tag(0x09, 1000, &data);
+
+        // The last 4 bytes should be the previous tag size (11 header + data.len())
+        let tag_len = tag.len();
+        let prev_tag_size = ((tag[tag_len - 4] as u32) << 24)
+            | ((tag[tag_len - 3] as u32) << 16)
+            | ((tag[tag_len - 2] as u32) << 8)
+            | (tag[tag_len - 1] as u32);
+        assert_eq!(prev_tag_size, 11 + data.len() as u32);
+    }
 }

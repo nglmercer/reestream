@@ -11,6 +11,7 @@ pub mod dashboard;
 pub mod databus;
 pub mod dvr;
 pub mod flv;
+pub mod hls_transmux;
 pub mod recording;
 pub mod recording_ext;
 pub mod stream;

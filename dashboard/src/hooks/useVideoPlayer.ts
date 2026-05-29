@@ -27,37 +27,75 @@ export function useVideoPlayer(opts: UsePlayerOptions): UsePlayerReturn {
   const [error, setError] = useState<string | null>(null);
   const [latency, setLatency] = useState(0);
   const [playerType, setPlayerType] = useState<PlayerType>('native');
-  const flvPlayerRef = useRef<{ destroy?: () => void } | null>(null);
-  const hlsPlayerRef = useRef<{ destroy?: () => void } | null>(null);
+  const flvPlayerRef = useRef<any>(null);
+  const hlsPlayerRef = useRef<any>(null);
+  const initIdRef = useRef(0);
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !opts.url) return;
 
-    let destroyed = false;
+    const currentInitId = ++initIdRef.current;
     setError(null);
+    setLatency(0);
+    setPlaying(false);
 
     const isFlv = opts.url.endsWith('.flv');
     const isHls = opts.url.endsWith('.m3u8');
 
+    function destroyFlv() {
+      if (flvPlayerRef.current) {
+        try {
+          if (typeof flvPlayerRef.current.detachMediaElement === 'function') {
+            flvPlayerRef.current.detachMediaElement();
+          }
+          if (typeof flvPlayerRef.current.destroy === 'function') {
+            flvPlayerRef.current.destroy();
+          }
+        } catch {}
+        flvPlayerRef.current = null;
+      }
+    }
+
+    function destroyHls() {
+      if (hlsPlayerRef.current) {
+        try {
+          if (typeof hlsPlayerRef.current.destroy === 'function') {
+            hlsPlayerRef.current.destroy();
+          }
+        } catch {}
+        hlsPlayerRef.current = null;
+      }
+    }
+
+    function resetVideo() {
+      video.pause();
+      video.removeAttribute('src');
+      while (video.firstChild) {
+        video.removeChild(video.firstChild);
+      }
+      video.load();
+    }
+
     async function initFlv() {
       try {
         const flvjs = await import('flv.js');
-        if (destroyed) return;
+        if (currentInitId !== initIdRef.current) return;
 
-        if (!flvjs.default.isSupported()) {
+        const flvModule = flvjs.default || flvjs;
+        if (!flvModule.isSupported()) {
           setError('FLV.js not supported in this browser');
           return;
         }
 
-        const player = flvjs.default.createPlayer(
+        const player = flvModule.createPlayer(
           {
             type: 'flv',
-            url: opts.url,
             isLive: true,
+            url: opts.url,
           },
           {
-            enableWorker: true,
+            enableWorker: false,
             enableStashBuffer: false,
             stashInitialSize: 128,
             lazyLoad: false,
@@ -67,20 +105,25 @@ export function useVideoPlayer(opts: UsePlayerOptions): UsePlayerReturn {
             autoCleanupMaxBackwardDuration: 3,
             autoCleanupMinBackwardDuration: 1,
             fixAudioTimestampGap: true,
-            seekType: 'range',
+            seekType: 'param',
           },
         );
 
-        player.attachMediaElement(video!);
+        if (currentInitId !== initIdRef.current) {
+          try { player.destroy(); } catch {}
+          return;
+        }
+
+        player.attachMediaElement(video);
         player.load();
 
         if (opts.autoplay !== false) {
           try {
-            await video!.play();
+            await video.play();
             setPlaying(true);
           } catch {
-            video!.muted = true;
-            await video!.play().catch(() => {});
+            video.muted = true;
+            await video.play().catch(() => {});
             setPlaying(true);
           }
         }
@@ -88,14 +131,16 @@ export function useVideoPlayer(opts: UsePlayerOptions): UsePlayerReturn {
         flvPlayerRef.current = player;
         setPlayerType('flv');
       } catch (e) {
-        if (!destroyed) setError(`FLV init failed: ${e}`);
+        if (currentInitId === initIdRef.current) {
+          setError(`FLV init failed: ${e}`);
+        }
       }
     }
 
     async function initHls() {
       try {
         const Hls = (await import('hls.js')).default;
-        if (destroyed) return;
+        if (currentInitId !== initIdRef.current) return;
 
         if (Hls.isSupported()) {
           const hls = new Hls({
@@ -105,85 +150,95 @@ export function useVideoPlayer(opts: UsePlayerOptions): UsePlayerReturn {
             enableWorker: true,
           });
 
+          if (currentInitId !== initIdRef.current) {
+            try { hls.destroy(); } catch {}
+            return;
+          }
+
           hls.loadSource(opts.url);
-          hls.attachMedia(video!);
+          hls.attachMedia(video);
 
           hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            if (currentInitId !== initIdRef.current) return;
             if (opts.autoplay !== false) {
-              video!.play().catch(() => {
-                video!.muted = true;
-                video!.play().catch(() => {});
+              video.play().catch(() => {
+                video.muted = true;
+                video.play().catch(() => {});
               });
             }
           });
 
           hls.on(Hls.Events.ERROR, (_event, data) => {
-            if (data.fatal && !destroyed) {
+            if (data.fatal && currentInitId === initIdRef.current) {
               setError(`HLS error: ${data.type} - ${data.details}`);
             }
           });
 
           hlsPlayerRef.current = hls;
           setPlayerType('hls');
-        } else if (video!.canPlayType('application/vnd.apple.mpegurl')) {
-          video!.src = opts.url;
-          video!.load();
+        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+          video.src = opts.url;
+          video.load();
           if (opts.autoplay !== false) {
-            video!.play().catch(() => {});
+            video.play().catch(() => {});
           }
           setPlayerType('native');
         } else {
           setError('HLS not supported in this browser');
         }
       } catch (e) {
-        if (!destroyed) setError(`HLS init failed: ${e}`);
+        if (currentInitId === initIdRef.current) {
+          setError(`HLS init failed: ${e}`);
+        }
       }
     }
 
-    if (isFlv) {
-      initFlv();
-    } else if (isHls) {
-      initHls();
-    } else {
-      video!.src = opts.url;
-      video!.load();
-      if (opts.autoplay !== false) {
-        video!.play().catch(() => {});
+    destroyFlv();
+    destroyHls();
+    resetVideo();
+
+    requestAnimationFrame(() => {
+      if (currentInitId !== initIdRef.current) return;
+
+      if (isFlv) {
+        initFlv();
+      } else if (isHls) {
+        initHls();
+      } else {
+        video.src = opts.url;
+        video.load();
+        if (opts.autoplay !== false) {
+          video.play().catch(() => {});
+        }
+        setPlayerType('native');
       }
-      setPlayerType('native');
-    }
+    });
 
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
-    const onError = () => setError(`Video error: ${video!.error?.message ?? 'unknown'}`);
+    const onError = () => setError(`Video error: ${video.error?.message ?? 'unknown'}`);
 
-    video!.addEventListener('play', onPlay);
-    video!.addEventListener('pause', onPause);
-    video!.addEventListener('error', onError);
+    video.addEventListener('play', onPlay);
+    video.addEventListener('pause', onPause);
+    video.addEventListener('error', onError);
 
     const interval = setInterval(() => {
-      if (destroyed || !video!.buffered.length) return;
-      const behind = video!.buffered.end(video!.buffered.length - 1) - video!.currentTime;
+      if (currentInitId !== initIdRef.current || !video.buffered.length) return;
+      const behind = video.buffered.end(video.buffered.length - 1) - video.currentTime;
       setLatency(Math.max(0, behind));
     }, 500);
 
     return () => {
-      destroyed = true;
+      initIdRef.current++;
       clearInterval(interval);
-      video!.removeEventListener('play', onPlay);
-      video!.removeEventListener('pause', onPause);
-      video!.removeEventListener('error', onError);
-      video!.pause();
-      video!.src = '';
-
-      if (flvPlayerRef.current && typeof flvPlayerRef.current.destroy === 'function') {
-        flvPlayerRef.current.destroy();
-        flvPlayerRef.current = null;
-      }
-      if (hlsPlayerRef.current && typeof hlsPlayerRef.current.destroy === 'function') {
-        hlsPlayerRef.current.destroy();
-        hlsPlayerRef.current = null;
-      }
+      video.removeEventListener('play', onPlay);
+      video.removeEventListener('pause', onPause);
+      video.removeEventListener('error', onError);
+      destroyFlv();
+      destroyHls();
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
     };
   }, [opts.url, opts.autoplay]);
 
@@ -195,10 +250,13 @@ export function useVideoPlayer(opts: UsePlayerOptions): UsePlayerReturn {
     videoRef.current?.pause();
   }, []);
 
+  const playingRef = useRef(playing);
+  playingRef.current = playing;
+
   const toggle = useCallback(() => {
-    if (playing) pause();
+    if (playingRef.current) pause();
     else play();
-  }, [playing, play, pause]);
+  }, [play, pause]);
 
   return { videoRef, playing, error, latency, playerType, play, pause, toggle };
 }

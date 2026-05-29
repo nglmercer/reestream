@@ -8,4 +8,7 @@ export default defineConfig({
     outDir: '../crates/reestream-server/static',
     emptyOutDir: true,
   },
+  optimizeDeps: {
+    include: ['flv.js'],
+  },
 })
