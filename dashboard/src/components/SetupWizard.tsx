@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from 'preact/hooks';
+import { useLocale } from '../hooks/useLocale';
 
 interface SetupPlatform {
   name: string;
@@ -26,6 +27,7 @@ const PRESETS: Array<{ name: string; url: string; placeholder: string }> = [
 ];
 
 export function SetupWizard() {
+  const { t } = useLocale();
   const [step, setStep] = useState<Step>('welcome');
   const [error, setError] = useState<string | null>(null);
 
@@ -96,10 +98,10 @@ export function SetupWizard() {
       if (data.success) {
         setStep('done');
       } else {
-        setError(data.error ?? 'Setup failed');
+        setError(data.error ?? t('setup.failed'));
       }
     } catch (e) {
-      setError(`Network error: ${e}`);
+      setError(t('setup.networkError', { error: String(e) }));
     } finally {
       setSaving(false);
     }
@@ -144,47 +146,46 @@ export function SetupWizard() {
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
                 </svg>
               </div>
-              <h1 class="text-2xl font-bold mb-2 text-fg">Welcome to Reestream</h1>
+              <h1 class="text-2xl font-bold mb-2 text-fg">{t('setup.welcome')}</h1>
               <p class="text-fg-muted mb-6">
-                Let's set up your streaming relay. This wizard will configure your
-                RTMP server and output platforms.
+                {t('setup.welcomeDesc')}
               </p>
               <button
                 onClick={() => setStep('server')}
                 class="px-6 py-3 bg-accent hover:bg-accent-hover text-white rounded-lg font-medium transition-colors"
               >
-                Get Started
+                {t('setup.getStarted')}
               </button>
             </div>
           )}
 
           {step === 'server' && (
             <div>
-              <h2 class="text-xl font-bold mb-1 text-fg">Server Configuration</h2>
-              <p class="text-fg-muted text-sm mb-6">Configure your RTMP server settings.</p>
+              <h2 class="text-xl font-bold mb-1 text-fg">{t('setup.serverConfig')}</h2>
+              <p class="text-fg-muted text-sm mb-6">{t('setup.serverConfigDesc')}</p>
 
               <div class="space-y-4">
                 <div>
-                  <label class="block text-sm text-fg-muted mb-1">RTMP Port</label>
+                  <label class="block text-sm text-fg-muted mb-1">{t('setup.rtmpPort')}</label>
                   <input
                     type="number"
                     value={rtmpPort}
                     onInput={(e) => setRtmpPort((e.target as HTMLInputElement).value)}
                     class="w-full bg-surface-input border border-border rounded-lg px-4 py-2.5 text-fg focus:outline-none focus:border-accent"
                   />
-                  <p class="text-xs text-fg-faint mt-1">Default: 1935. Use 1935 for standard RTMP.</p>
+                  <p class="text-xs text-fg-faint mt-1">{t('setup.rtmpPortHelp')}</p>
                 </div>
 
                 <div>
-                  <label class="block text-sm text-fg-muted mb-1">Stream Key</label>
+                  <label class="block text-sm text-fg-muted mb-1">{t('setup.streamKey')}</label>
                   <input
                     type="password"
                     value={streamKey}
                     onInput={(e) => setStreamKey((e.target as HTMLInputElement).value)}
-                    placeholder="your-secret-stream-key"
+                    placeholder={t('setup.streamKeyPlaceholder')}
                     class="w-full bg-surface-input border border-border rounded-lg px-4 py-2.5 text-fg focus:outline-none focus:border-accent"
                   />
-                  <p class="text-xs text-fg-faint mt-1">This key is required to publish streams. Keep it secret.</p>
+                  <p class="text-xs text-fg-faint mt-1">{t('setup.streamKeyHelp')}</p>
                 </div>
               </div>
 
@@ -193,14 +194,14 @@ export function SetupWizard() {
                   onClick={() => setStep('welcome')}
                   class="px-4 py-2 text-fg-muted hover:text-fg transition-colors"
                 >
-                  Back
+                  {t('setup.back')}
                 </button>
                 <button
                   onClick={() => setStep('platforms')}
                   disabled={!streamKey}
                   class="px-6 py-2.5 bg-accent hover:bg-accent-hover disabled:bg-surface-active disabled:text-fg-faint text-white rounded-lg font-medium transition-colors"
                 >
-                  Next
+                  {t('setup.next')}
                 </button>
               </div>
             </div>
@@ -208,8 +209,8 @@ export function SetupWizard() {
 
           {step === 'platforms' && (
             <div>
-              <h2 class="text-xl font-bold mb-1 text-fg">Output Platforms</h2>
-              <p class="text-fg-muted text-sm mb-4">Add streaming destinations. You can skip this and add them later.</p>
+              <h2 class="text-xl font-bold mb-1 text-fg">{t('setup.outputPlatforms')}</h2>
+              <p class="text-fg-muted text-sm mb-4">{t('setup.outputPlatformsDesc')}</p>
 
               <div class="flex flex-wrap gap-2 mb-4">
                 {PRESETS.map((p) => (
@@ -218,20 +219,20 @@ export function SetupWizard() {
                     onClick={() => addPlatform(p)}
                     class="px-3 py-1.5 text-xs rounded-lg bg-surface-hover border border-border hover:border-accent hover:text-accent transition-colors text-fg-secondary"
                   >
-                    + {p.name}
+                    {t('setup.addPreset', { name: p.name })}
                   </button>
                 ))}
                 <button
                   onClick={addCustomPlatform}
                   class="px-3 py-1.5 text-xs rounded-lg bg-surface-hover border border-border border-dashed hover:border-accent hover:text-accent transition-colors text-fg-secondary"
                 >
-                  + Custom
+                  {t('setup.addCustom')}
                 </button>
               </div>
 
               {platforms.length === 0 ? (
                 <div class="text-center py-8 text-fg-faint text-sm">
-                  No platforms added. You can add them later from the dashboard.
+                  {t('setup.noPlatforms')}
                 </div>
               ) : (
                 <div class="space-y-3 max-h-64 overflow-y-auto">
@@ -261,7 +262,7 @@ export function SetupWizard() {
                           onClick={() => removePlatform(i)}
                           class="text-danger hover:text-danger text-xs"
                         >
-                          Remove
+                          {t('setup.remove')}
                         </button>
                       </div>
                       <input
@@ -277,7 +278,7 @@ export function SetupWizard() {
                         class="w-full bg-surface-hover border border-border rounded px-3 py-1.5 text-sm text-fg focus:outline-none focus:border-accent"
                       />
                       <div class="flex items-center gap-3 mt-2">
-                        <label class="text-xs text-fg-faint">Orientation:</label>
+                        <label class="text-xs text-fg-faint">{t('setup.orientation')}</label>
                         <select
                           value={p.orientation}
                           onChange={(e) =>
@@ -285,8 +286,8 @@ export function SetupWizard() {
                           }
                           class="bg-surface-hover border border-border rounded px-2 py-1 text-xs text-fg-secondary"
                         >
-                          <option value="horizontal">Horizontal (16:9)</option>
-                          <option value="vertical">Vertical (9:16)</option>
+                          <option value="horizontal">{t('setup.horizontal')}</option>
+                          <option value="vertical">{t('setup.vertical')}</option>
                         </select>
                       </div>
                     </div>
@@ -299,13 +300,13 @@ export function SetupWizard() {
                   onClick={() => setStep('server')}
                   class="px-4 py-2 text-fg-muted hover:text-fg transition-colors"
                 >
-                  Back
+                  {t('setup.back')}
                 </button>
                 <button
                   onClick={() => setStep('confirm')}
                   class="px-6 py-2.5 bg-accent hover:bg-accent-hover text-white rounded-lg font-medium transition-colors"
                 >
-                  Next
+                  {t('setup.next')}
                 </button>
               </div>
             </div>
@@ -313,22 +314,22 @@ export function SetupWizard() {
 
           {step === 'confirm' && (
             <div>
-              <h2 class="text-xl font-bold mb-1 text-fg">Review Configuration</h2>
-              <p class="text-fg-muted text-sm mb-6">Confirm your settings before saving.</p>
+              <h2 class="text-xl font-bold mb-1 text-fg">{t('setup.review')}</h2>
+              <p class="text-fg-muted text-sm mb-6">{t('setup.reviewDesc')}</p>
 
               <div class="space-y-3">
                 <div class="bg-surface-raised rounded-lg p-4 border border-border">
-                  <div class="text-xs text-fg-faint mb-1">RTMP Port</div>
+                  <div class="text-xs text-fg-faint mb-1">{t('setup.reviewPort')}</div>
                   <div class="text-fg">{rtmpPort}</div>
                 </div>
                 <div class="bg-surface-raised rounded-lg p-4 border border-border">
-                  <div class="text-xs text-fg-faint mb-1">Stream Key</div>
+                  <div class="text-xs text-fg-faint mb-1">{t('setup.reviewKey')}</div>
                   <div class="text-fg font-mono">{'•'.repeat(Math.min(streamKey.length, 20))}</div>
                 </div>
                 <div class="bg-surface-raised rounded-lg p-4 border border-border">
-                  <div class="text-xs text-fg-faint mb-1">Platforms ({validPlatforms.length})</div>
+                  <div class="text-xs text-fg-faint mb-1">{t('setup.reviewPlatforms', { count: validPlatforms.length })}</div>
                   {validPlatforms.length === 0 ? (
-                    <div class="text-fg-faint text-sm">None — add later from dashboard</div>
+                    <div class="text-fg-faint text-sm">{t('setup.reviewNoPlatforms')}</div>
                   ) : (
                     <div class="space-y-1">
                       {validPlatforms.map((p, i) => (
@@ -352,14 +353,14 @@ export function SetupWizard() {
                   onClick={() => setStep('platforms')}
                   class="px-4 py-2 text-fg-muted hover:text-fg transition-colors"
                 >
-                  Back
+                  {t('setup.back')}
                 </button>
                 <button
                   onClick={handleSave}
                   disabled={saving || !canSave}
                   class="px-6 py-2.5 bg-success hover:opacity-90 disabled:bg-surface-active disabled:text-fg-faint text-white rounded-lg font-medium transition-colors"
                 >
-                  {saving ? 'Saving…' : 'Save & Start'}
+                  {saving ? t('setup.saving') : t('setup.saveStart')}
                 </button>
               </div>
             </div>
@@ -372,12 +373,12 @@ export function SetupWizard() {
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
                 </svg>
               </div>
-              <h1 class="text-2xl font-bold mb-2 text-fg">Setup Complete!</h1>
+              <h1 class="text-2xl font-bold mb-2 text-fg">{t('setup.done')}</h1>
               <p class="text-fg-muted mb-6">
-                Your Reestream server is configured and ready.
+                {t('setup.doneDesc')}
               </p>
               <p class="text-fg-faint text-sm mb-6">
-                Restart the server to apply the new configuration:
+                {t('setup.doneHint')}
               </p>
               <code class="block bg-surface-raised rounded-lg px-4 py-3 text-sm text-accent mb-6 border border-border">
                 reestream --config config.toml
@@ -386,7 +387,7 @@ export function SetupWizard() {
                 href="/"
                 class="inline-block px-6 py-2.5 bg-accent hover:bg-accent-hover text-white rounded-lg font-medium transition-colors"
               >
-                Open Dashboard
+                {t('setup.openDashboard')}
               </a>
             </div>
           )}

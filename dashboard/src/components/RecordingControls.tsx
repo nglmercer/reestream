@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
 import { api } from '../api';
+import { useLocale } from '../hooks/useLocale';
 
 interface Recording {
   id: string;
@@ -16,6 +17,7 @@ interface Props {
 }
 
 export function RecordingControls({ addLog }: Props) {
+  const { t } = useLocale();
   const [recordings, setRecordings] = useState<Recording[]>([]);
   const [loading, setLoading] = useState(true);
   const [recording, setRecording] = useState(false);
@@ -42,13 +44,13 @@ export function RecordingControls({ addLog }: Props) {
     try {
       const res = await api.startRecording('live', 'rtmp://0.0.0.0:1935/live');
       if (res.success) {
-        addLog(`Recording started: ${res.data}`);
+        addLog(t('log.recordingStarted', { id: res.data }));
         refresh();
       } else {
-        addLog(`Recording failed: ${res.error}`, 'error');
+        addLog(t('log.recordingFailed', { error: res.error }), 'error');
       }
     } catch (e) {
-      addLog(`Recording error: ${e}`, 'error');
+      addLog(t('log.recordingError', { error: e }), 'error');
     } finally {
       setRecording(false);
     }
@@ -58,10 +60,10 @@ export function RecordingControls({ addLog }: Props) {
     async (id: string) => {
       const res = await api.stopRecording(id);
       if (res.success) {
-        addLog('Recording stopped');
+        addLog(t('log.recordingStopped'));
         refresh();
       } else {
-        addLog(`Stop failed: ${res.error}`, 'error');
+        addLog(t('log.stopFailed', { error: res.error }), 'error');
       }
     },
     [addLog, refresh],
@@ -69,29 +71,30 @@ export function RecordingControls({ addLog }: Props) {
 
   const handleDelete = useCallback(
     async (id: string) => {
-      if (!confirm('Delete this recording file?')) return;
+      if (!confirm(t('recording.confirmDelete'))) return;
       const res = await api.deleteRecording(id);
       if (res.success) {
-        addLog('Recording deleted');
+        addLog(t('log.recordingDeleted'));
         refresh();
       } else {
-        addLog(`Delete failed: ${res.error}`, 'error');
+        addLog(t('log.deleteFailed', { error: res.error }), 'error');
       }
     },
     [addLog, refresh],
   );
 
   const formatSize = (bytes: number): string => {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / 1048576).toFixed(1)} MB`;
+    const units = t('recording.sizeUnits') as string[];
+    if (bytes < 1024) return `${bytes}${units[0]}`;
+    if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)}${units[1]}`;
+    return `${(bytes / 1048576).toFixed(1)}${units[2]}`;
   };
 
   const formatDuration = (startedAt: number): string => {
     const secs = Math.floor(Date.now() / 1000) - startedAt;
-    if (secs < 60) return `${secs}s`;
-    if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`;
-    return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
+    if (secs < 60) return t('time.seconds', { s: secs });
+    if (secs < 3600) return t('time.minutesSeconds', { m: Math.floor(secs / 60), s: secs % 60 });
+    return t('time.hoursMinutes', { h: Math.floor(secs / 3600), m: Math.floor((secs % 3600) / 60) });
   };
 
   const activeRecordings = recordings.filter((r) => r.status === 'recording');
@@ -100,13 +103,13 @@ export function RecordingControls({ addLog }: Props) {
   return (
     <div class="bg-surface-alt border border-border rounded-xl mb-6">
       <div class="flex items-center justify-between px-5 py-4 border-b border-border">
-        <h2 class="text-base font-semibold text-fg">Recordings</h2>
+        <h2 class="text-base font-semibold text-fg">{t('recording.title')}</h2>
         <div class="flex items-center gap-2">
           <button
             onClick={refresh}
             class="px-3 py-1.5 text-sm rounded-lg bg-surface-hover border border-border hover:bg-surface-active transition-colors text-fg-secondary"
           >
-            Refresh
+            {t('recording.refresh')}
           </button>
           <button
             onClick={handleStart}

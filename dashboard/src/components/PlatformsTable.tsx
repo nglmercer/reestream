@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'preact/hooks';
 import type { Platform, UpdatePlatformRequest } from '../api';
+import { useLocale } from '../hooks/useLocale';
 
 interface Props {
   platforms: Platform[];
@@ -21,6 +22,7 @@ const PRESETS: Array<{ name: string; url: string }> = [
 ];
 
 export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd, onRemove, onUpdate }: Props) {
+  const { t } = useLocale();
   const [showAdd, setShowAdd] = useState(false);
   const [addName, setAddName] = useState('');
   const [addUrl, setAddUrl] = useState('');
@@ -56,7 +58,7 @@ export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd,
 
   const handleRemove = useCallback(
     async (id: string, name: string) => {
-      if (!confirm(`Remove platform "${name}"?`)) return;
+      if (!confirm(t('platforms.confirmRemove', { name }))) return;
       setRemoving(id);
       try {
         await onRemove(id);
@@ -101,19 +103,19 @@ export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd,
   return (
     <div class="bg-surface-alt border border-border rounded-xl mb-6">
       <div class="flex items-center justify-between px-5 py-4 border-b border-border">
-        <h2 class="text-base font-semibold text-fg">Platforms</h2>
+        <h2 class="text-base font-semibold text-fg">{t('platforms.title')}</h2>
         <div class="flex items-center gap-2">
           <button
             onClick={onRefresh}
             class="px-3 py-1.5 text-sm rounded-lg bg-surface-hover border border-border hover:bg-surface-active transition-colors text-fg-secondary"
           >
-            Refresh
+            {t('platforms.refresh')}
           </button>
           <button
             onClick={() => setShowAdd(!showAdd)}
             class="px-3 py-1.5 text-sm rounded-lg bg-accent hover:bg-accent-hover text-white transition-colors"
           >
-            {showAdd ? 'Cancel' : '+ Add Platform'}
+            {showAdd ? t('platforms.cancel') : t('platforms.add')}
           </button>
         </div>
       </div>
@@ -139,19 +141,19 @@ export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd,
             <input
               value={addName}
               onInput={(e) => setAddName((e.target as HTMLInputElement).value)}
-              placeholder="Name"
+              placeholder={t('platforms.placeholder.name')}
               class="bg-surface-input border border-border rounded-lg px-3 py-2 text-sm text-fg focus:outline-none focus:border-accent"
             />
             <input
               value={addUrl}
               onInput={(e) => setAddUrl((e.target as HTMLInputElement).value)}
-              placeholder="rtmp://server/app"
+              placeholder={t('platforms.placeholder.url')}
               class="bg-surface-input border border-border rounded-lg px-3 py-2 text-sm text-fg focus:outline-none focus:border-accent"
             />
             <input
               value={addKey}
               onInput={(e) => setAddKey((e.target as HTMLInputElement).value)}
-              placeholder="Stream key"
+              placeholder={t('platforms.placeholder.key')}
               type="password"
               class="bg-surface-input border border-border rounded-lg px-3 py-2 text-sm text-fg focus:outline-none focus:border-accent"
             />
@@ -161,7 +163,7 @@ export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd,
             disabled={adding || !addName || !addUrl || !addKey}
             class="px-4 py-2 text-sm rounded-lg bg-success hover:opacity-90 disabled:bg-surface-active disabled:text-fg-faint text-white transition-colors"
           >
-            {adding ? 'Adding…' : 'Add Platform'}
+            {adding ? t('platforms.adding') : t('platforms.add')}
           </button>
         </div>
       )}
@@ -170,23 +172,23 @@ export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd,
         <table class="w-full text-sm">
           <thead>
             <tr class="text-left text-xs uppercase tracking-wider text-fg-faint">
-              <th class="px-5 py-3 border-b border-border">ID</th>
-              <th class="px-5 py-3 border-b border-border">Name</th>
-              <th class="px-5 py-3 border-b border-border">URL</th>
-              <th class="px-5 py-3 border-b border-border">Key</th>
-              <th class="px-5 py-3 border-b border-border">Enabled</th>
-              <th class="px-5 py-3 border-b border-border">Actions</th>
+              <th class="px-5 py-3 border-b border-border">{t('platforms.column.id')}</th>
+              <th class="px-5 py-3 border-b border-border">{t('platforms.column.name')}</th>
+              <th class="px-5 py-3 border-b border-border">{t('platforms.column.url')}</th>
+              <th class="px-5 py-3 border-b border-border">{t('platforms.column.key')}</th>
+              <th class="px-5 py-3 border-b border-border">{t('platforms.column.enabled')}</th>
+              <th class="px-5 py-3 border-b border-border">{t('platforms.column.actions')}</th>
             </tr>
           </thead>
           <tbody>
             {loading && platforms.length === 0 ? (
               <tr>
-                <td colSpan={6} class="px-5 py-10 text-center text-fg-faint">Loading…</td>
+                <td colSpan={6} class="px-5 py-10 text-center text-fg-faint">{t('platforms.loading')}</td>
               </tr>
             ) : platforms.length === 0 ? (
               <tr>
                 <td colSpan={6} class="px-5 py-10 text-center text-fg-faint">
-                  No platforms. Click "+ Add Platform" to add one.
+                  {t('platforms.empty')}
                 </td>
               </tr>
             ) : (
@@ -225,7 +227,7 @@ export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd,
                             : 'bg-surface-active text-fg-muted border border-border-strong'
                         }`}
                       >
-                        {editEnabled ? 'Yes' : 'No'}
+                        {editEnabled ? t('platforms.yes') : t('platforms.no')}
                       </button>
                     </td>
                     <td class="px-5 py-2">
@@ -235,13 +237,13 @@ export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd,
                           disabled={saving}
                           class="px-3 py-1 text-xs rounded bg-success hover:opacity-90 disabled:bg-surface-active text-white transition-colors"
                         >
-                          {saving ? '…' : 'Save'}
+                          {saving ? t('platforms.saving') : t('platforms.save')}
                         </button>
                         <button
                           onClick={cancelEdit}
                           class="px-3 py-1 text-xs rounded bg-surface-hover hover:bg-surface-active border border-border text-fg-secondary transition-colors"
                         >
-                          Cancel
+                          {t('platforms.cancel')}
                         </button>
                       </div>
                     </td>
@@ -261,7 +263,7 @@ export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd,
                             : 'bg-surface-hover text-fg-muted border border-border hover:bg-surface-active'
                         }`}
                       >
-                        {p.enabled ? 'Yes' : 'No'}
+                        {p.enabled ? t('platforms.yes') : t('platforms.no')}
                       </button>
                     </td>
                     <td class="px-5 py-3">
@@ -270,7 +272,7 @@ export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd,
                           onClick={() => startEdit(p)}
                           class="px-3 py-1 text-xs rounded border border-accent text-accent hover:bg-accent-bg transition-colors"
                         >
-                          Edit
+                          {t('platforms.edit')}
                         </button>
                         <button
                           onClick={() => handleRemove(p.id, p.name)}
@@ -278,7 +280,7 @@ export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd,
                           class="px-3 py-1 text-xs rounded border text-danger hover:bg-danger-bg disabled:opacity-50 transition-colors"
                           style={{ borderColor: 'var(--danger)' }}
                         >
-                          {removing === p.id ? '…' : 'Remove'}
+                          {removing === p.id ? t('platforms.removing') : t('platforms.remove')}
                         </button>
                       </div>
                     </td>

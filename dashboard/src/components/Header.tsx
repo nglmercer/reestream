@@ -1,4 +1,5 @@
 import { useTheme } from '../hooks/useTheme';
+import { useLocale } from '../hooks/useLocale';
 
 interface Props {
   version: string;
@@ -8,22 +9,23 @@ interface Props {
 
 export function Header({ version, onSettings, wsConnected }: Props) {
   const { theme, toggle } = useTheme();
+  const { t } = useLocale();
 
   return (
     <header class="bg-surface-alt border-b border-border px-6 py-4 flex items-center justify-between">
-      <h1 class="text-lg font-bold text-accent">Reestream Dashboard</h1>
+      <h1 class="text-lg font-bold text-accent">{t('header.title')}</h1>
       <div class="flex items-center gap-3">
         {wsConnected !== undefined && (
           <span
             class={`w-2 h-2 rounded-full ${wsConnected ? 'bg-success' : 'bg-warning animate-pulse'}`}
-            title={wsConnected ? 'Live updates connected' : 'Reconnecting…'}
+            title={wsConnected ? t('header.connected') : t('header.reconnecting')}
           />
         )}
-        <span class="text-sm text-fg-faint">v{version}</span>
+        <span class="text-sm text-fg-faint">{t('header.version', { version })}</span>
         <button
           onClick={toggle}
           class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-surface-hover text-fg-muted hover:text-fg transition-colors"
-          title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+          title={t('header.switchTheme', { mode: theme === 'dark' ? 'light' : 'dark' })}
         >
           {theme === 'dark' ? (
             <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -48,7 +50,7 @@ export function Header({ version, onSettings, wsConnected }: Props) {
         <button
           onClick={onSettings}
           class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-surface-hover text-fg-muted hover:text-fg transition-colors"
-          title="Settings"
+          title={t('header.settings')}
         >
           <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path

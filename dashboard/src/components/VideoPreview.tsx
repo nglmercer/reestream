@@ -1,5 +1,6 @@
 import { useState } from 'preact/hooks';
 import { useVideoPlayer } from '../hooks/useVideoPlayer';
+import { useLocale } from '../hooks/useLocale';
 
 interface Props {
   streams: Array<{ id: string; name: string; status: string }>;
@@ -8,6 +9,7 @@ interface Props {
 type StreamSource = 'flv' | 'hls';
 
 export function VideoPreview({ streams }: Props) {
+  const { t } = useLocale();
   const [source, setSource] = useState<StreamSource>('flv');
   const [selectedStream, setSelectedStream] = useState<string>('');
 
@@ -35,7 +37,7 @@ export function VideoPreview({ streams }: Props) {
   return (
     <div class="bg-surface-alt border border-border rounded-xl mb-6">
       <div class="flex items-center justify-between px-5 py-4 border-b border-border">
-        <h2 class="text-base font-semibold text-fg">Stream Preview</h2>
+        <h2 class="text-base font-semibold text-fg">{t('preview.title')}</h2>
         <div class="flex items-center gap-3">
           <div class="flex items-center gap-1 bg-surface-hover rounded-lg p-0.5">
             <button
@@ -46,7 +48,7 @@ export function VideoPreview({ streams }: Props) {
                   : 'text-fg-muted hover:text-fg'
               }`}
             >
-              FLV (low latency)
+              {t('preview.flv')}
             </button>
             <button
               onClick={() => setSource('hls')}
@@ -56,7 +58,7 @@ export function VideoPreview({ streams }: Props) {
                   : 'text-fg-muted hover:text-fg'
               }`}
             >
-              HLS
+              {t('preview.hls')}
             </button>
           </div>
           {streams.length > 1 && (
@@ -65,7 +67,7 @@ export function VideoPreview({ streams }: Props) {
               onChange={(e) => setSelectedStream((e.target as HTMLSelectElement).value)}
               class="bg-surface-hover border border-border rounded px-2 py-1 text-xs text-fg-secondary"
             >
-              <option value="">Auto ({liveStream?.name ?? 'none'})</option>
+              <option value="">{liveStream?.name ? t('preview.auto', { name: liveStream.name }) : t('preview.autoNone')}</option>
               {streams.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}
@@ -93,9 +95,9 @@ export function VideoPreview({ streams }: Props) {
                   d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"
                 />
               </svg>
-              <p class="text-fg-muted text-sm">No live stream to preview</p>
+              <p class="text-fg-muted text-sm">{t('preview.noStream')}</p>
               <p class="text-fg-faint text-xs mt-1">
-                Start a stream to see the preview here
+                {t('preview.noStreamHint')}
               </p>
             </div>
           </div>
@@ -136,7 +138,7 @@ export function VideoPreview({ streams }: Props) {
                     )}
                   </button>
                   <span class="text-white text-xs font-mono">
-                    {playing ? 'LIVE' : 'PAUSED'}
+                    {playing ? t('preview.live') : t('preview.paused')}
                   </span>
                 </div>
                 <div class="flex items-center gap-3">
@@ -148,7 +150,7 @@ export function VideoPreview({ streams }: Props) {
                       latency < 1 ? 'text-success' : latency < 3 ? 'text-warning' : 'text-danger'
                     }`}
                   >
-                    {latency.toFixed(1)}s lag
+                    {t('preview.lag', { time: latency.toFixed(1) })}
                   </span>
                 </div>
               </div>
