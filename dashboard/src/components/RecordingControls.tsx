@@ -63,7 +63,7 @@ export function RecordingControls({ addLog }: Props) {
         addLog(t('log.recordingStopped'));
         refresh();
       } else {
-        addLog(t('log.stopFailed', { error: res.error }), 'error');
+        addLog(t('log.stopFailed', { error: res.error ?? 'unknown' }), 'error');
       }
     },
     [addLog, refresh],
@@ -77,7 +77,7 @@ export function RecordingControls({ addLog }: Props) {
         addLog(t('log.recordingDeleted'));
         refresh();
       } else {
-        addLog(t('log.deleteFailed', { error: res.error }), 'error');
+        addLog(t('log.deleteFailed', { error: res.error ?? 'unknown' }), 'error');
       }
     },
     [addLog, refresh],
