@@ -105,7 +105,7 @@ export function App() {
         addLog(t('log.platformToggled'));
         platforms.refresh();
       } else {
-        addLog(t('log.toggleFailed', { error: res.error }), 'error');
+        addLog(t('log.toggleFailed', { error: res.error ?? 'unknown' }), 'error');
       }
     },
     [addLog, platforms],
@@ -131,7 +131,7 @@ export function App() {
         addLog(t('log.platformRemoved'));
         platforms.refresh();
       } else {
-        addLog(t('log.removeFailed', { error: res.error }), 'error');
+        addLog(t('log.removeFailed', { error: res.error ?? 'unknown' }), 'error');
       }
     },
     [addLog, platforms],
@@ -144,7 +144,7 @@ export function App() {
         addLog(t('log.platformUpdated'));
         platforms.refresh();
       } else {
-        addLog(t('log.updateFailed', { error: res.error }), 'error');
+        addLog(t('log.updateFailed', { error: res.error ?? 'unknown' }), 'error');
       }
     },
     [addLog, platforms],
