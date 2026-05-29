@@ -35,6 +35,7 @@ export function useVideoPlayer(opts: UsePlayerOptions): UsePlayerReturn {
     const video = videoRef.current;
     if (!video || !opts.url) return;
 
+    const el = video;
     const currentInitId = ++initIdRef.current;
     setError(null);
     setLatency(0);
@@ -69,12 +70,12 @@ export function useVideoPlayer(opts: UsePlayerOptions): UsePlayerReturn {
     }
 
     function resetVideo() {
-      video.pause();
-      video.removeAttribute('src');
-      while (video.firstChild) {
-        video.removeChild(video.firstChild);
+      el.pause();
+      el.removeAttribute('src');
+      while (el.firstChild) {
+        el.removeChild(el.firstChild);
       }
-      video.load();
+      el.load();
     }
 
     async function initFlv() {
@@ -114,16 +115,16 @@ export function useVideoPlayer(opts: UsePlayerOptions): UsePlayerReturn {
           return;
         }
 
-        player.attachMediaElement(video);
+        player.attachMediaElement(el);
         player.load();
 
         if (opts.autoplay !== false) {
           try {
-            await video.play();
+            await el.play();
             setPlaying(true);
           } catch {
-            video.muted = true;
-            await video.play().catch(() => {});
+            el.muted = true;
+            await el.play().catch(() => {});
             setPlaying(true);
           }
         }
@@ -156,14 +157,14 @@ export function useVideoPlayer(opts: UsePlayerOptions): UsePlayerReturn {
           }
 
           hls.loadSource(opts.url);
-          hls.attachMedia(video);
+          hls.attachMedia(el);
 
           hls.on(Hls.Events.MANIFEST_PARSED, () => {
             if (currentInitId !== initIdRef.current) return;
             if (opts.autoplay !== false) {
-              video.play().catch(() => {
-                video.muted = true;
-                video.play().catch(() => {});
+              el.play().catch(() => {
+                el.muted = true;
+                el.play().catch(() => {});
               });
             }
           });
@@ -176,11 +177,11 @@ export function useVideoPlayer(opts: UsePlayerOptions): UsePlayerReturn {
 
           hlsPlayerRef.current = hls;
           setPlayerType('hls');
-        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-          video.src = opts.url;
-          video.load();
+        } else if (el.canPlayType('application/vnd.apple.mpegurl')) {
+          el.src = opts.url;
+          el.load();
           if (opts.autoplay !== false) {
-            video.play().catch(() => {});
+            el.play().catch(() => {});
           }
           setPlayerType('native');
         } else {
@@ -205,10 +206,10 @@ export function useVideoPlayer(opts: UsePlayerOptions): UsePlayerReturn {
       } else if (isHls) {
         initHls();
       } else {
-        video.src = opts.url;
-        video.load();
+        el.src = opts.url;
+        el.load();
         if (opts.autoplay !== false) {
-          video.play().catch(() => {});
+          el.play().catch(() => {});
         }
         setPlayerType('native');
       }
@@ -216,29 +217,29 @@ export function useVideoPlayer(opts: UsePlayerOptions): UsePlayerReturn {
 
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
-    const onError = () => setError(`Video error: ${video.error?.message ?? 'unknown'}`);
+    const onError = () => setError(`Video error: ${el.error?.message ?? 'unknown'}`);
 
-    video.addEventListener('play', onPlay);
-    video.addEventListener('pause', onPause);
-    video.addEventListener('error', onError);
+    el.addEventListener('play', onPlay);
+    el.addEventListener('pause', onPause);
+    el.addEventListener('error', onError);
 
     const interval = setInterval(() => {
-      if (currentInitId !== initIdRef.current || !video.buffered.length) return;
-      const behind = video.buffered.end(video.buffered.length - 1) - video.currentTime;
+      if (currentInitId !== initIdRef.current || !el.buffered.length) return;
+      const behind = el.buffered.end(el.buffered.length - 1) - el.currentTime;
       setLatency(Math.max(0, behind));
     }, 500);
 
     return () => {
       initIdRef.current++;
       clearInterval(interval);
-      video.removeEventListener('play', onPlay);
-      video.removeEventListener('pause', onPause);
-      video.removeEventListener('error', onError);
+      el.removeEventListener('play', onPlay);
+      el.removeEventListener('pause', onPause);
+      el.removeEventListener('error', onError);
       destroyFlv();
       destroyHls();
-      video.pause();
-      video.removeAttribute('src');
-      video.load();
+      el.pause();
+      el.removeAttribute('src');
+      el.load();
     };
   }, [opts.url, opts.autoplay]);
 

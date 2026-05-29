@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'preact/hooks';
+import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
 
 export function usePolling<T>(
   fetcher: () => Promise<T>,
@@ -7,17 +7,19 @@ export function usePolling<T>(
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const fetcherRef = useRef(fetcher);
+  fetcherRef.current = fetcher;
 
   const refresh = useCallback(() => {
     setLoading(true);
-    fetcher()
+    fetcherRef.current()
       .then((d) => {
         setData(d);
         setError(null);
       })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [fetcher]);
+  }, []);
 
   useEffect(() => {
     refresh();

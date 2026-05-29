@@ -33,17 +33,17 @@ export function VideoPreview({ streams }: Props) {
   const hasLive = !!liveStream;
 
   return (
-    <div class="bg-slate-900 border border-slate-800 rounded-xl mb-6">
-      <div class="flex items-center justify-between px-5 py-4 border-b border-slate-800">
-        <h2 class="text-base font-semibold">Stream Preview</h2>
+    <div class="bg-surface-alt border border-border rounded-xl mb-6">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-border">
+        <h2 class="text-base font-semibold text-fg">Stream Preview</h2>
         <div class="flex items-center gap-3">
-          <div class="flex items-center gap-1 bg-slate-800 rounded-lg p-0.5">
+          <div class="flex items-center gap-1 bg-surface-hover rounded-lg p-0.5">
             <button
               onClick={() => setSource('flv')}
               class={`px-2.5 py-1 text-xs rounded-md transition-colors ${
                 source === 'flv'
-                  ? 'bg-sky-600 text-white'
-                  : 'text-slate-400 hover:text-slate-200'
+                  ? 'bg-accent text-white'
+                  : 'text-fg-muted hover:text-fg'
               }`}
             >
               FLV (low latency)
@@ -52,8 +52,8 @@ export function VideoPreview({ streams }: Props) {
               onClick={() => setSource('hls')}
               class={`px-2.5 py-1 text-xs rounded-md transition-colors ${
                 source === 'hls'
-                  ? 'bg-sky-600 text-white'
-                  : 'text-slate-400 hover:text-slate-200'
+                  ? 'bg-accent text-white'
+                  : 'text-fg-muted hover:text-fg'
               }`}
             >
               HLS
@@ -63,7 +63,7 @@ export function VideoPreview({ streams }: Props) {
             <select
               value={selectedStream}
               onChange={(e) => setSelectedStream((e.target as HTMLSelectElement).value)}
-              class="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-300"
+              class="bg-surface-hover border border-border rounded px-2 py-1 text-xs text-fg-secondary"
             >
               <option value="">Auto ({liveStream?.name ?? 'none'})</option>
               {streams.map((s) => (
@@ -78,10 +78,10 @@ export function VideoPreview({ streams }: Props) {
 
       <div class="p-4">
         {!hasLive && !url ? (
-          <div class="flex items-center justify-center h-64 bg-slate-950 rounded-lg border border-slate-800">
+          <div class="flex items-center justify-center h-64 bg-surface rounded-lg border border-border">
             <div class="text-center">
               <svg
-                class="mx-auto mb-3 w-12 h-12 text-slate-600"
+                class="mx-auto mb-3 w-12 h-12 text-fg-faint"
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
@@ -93,8 +93,8 @@ export function VideoPreview({ streams }: Props) {
                   d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"
                 />
               </svg>
-              <p class="text-slate-500 text-sm">No live stream to preview</p>
-              <p class="text-slate-600 text-xs mt-1">
+              <p class="text-fg-muted text-sm">No live stream to preview</p>
+              <p class="text-fg-faint text-xs mt-1">
                 Start a stream to see the preview here
               </p>
             </div>
@@ -110,7 +110,6 @@ export function VideoPreview({ streams }: Props) {
               onClick={toggle}
             />
 
-            {/* Overlay controls */}
             <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-3 rounded-b-lg">
               <div class="flex items-center justify-between">
                 <div class="flex items-center gap-3">
@@ -146,7 +145,7 @@ export function VideoPreview({ streams }: Props) {
                   </span>
                   <span
                     class={`text-xs font-mono ${
-                      latency < 1 ? 'text-emerald-400' : latency < 3 ? 'text-amber-400' : 'text-red-400'
+                      latency < 1 ? 'text-success' : latency < 3 ? 'text-warning' : 'text-danger'
                     }`}
                   >
                     {latency.toFixed(1)}s lag
@@ -155,12 +154,11 @@ export function VideoPreview({ streams }: Props) {
               </div>
             </div>
 
-            {/* Error overlay */}
             {error && (
               <div class="absolute inset-0 flex items-center justify-center bg-black/60 rounded-lg">
                 <div class="text-center">
                   <svg
-                    class="mx-auto mb-2 w-8 h-8 text-red-400"
+                    class="mx-auto mb-2 w-8 h-8 text-danger"
                     fill="none"
                     viewBox="0 0 24 24"
                     stroke="currentColor"
@@ -172,7 +170,7 @@ export function VideoPreview({ streams }: Props) {
                       d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"
                     />
                   </svg>
-                  <p class="text-red-400 text-sm">{error}</p>
+                  <p class="text-danger text-sm">{error}</p>
                 </div>
               </div>
             )}

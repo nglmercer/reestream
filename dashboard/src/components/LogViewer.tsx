@@ -12,31 +12,31 @@ interface Props {
 }
 
 const levelColor: Record<string, string> = {
-  info: 'text-sky-400',
-  warn: 'text-amber-400',
-  error: 'text-red-400',
+  info: 'text-accent',
+  warn: 'text-warning',
+  error: 'text-danger',
 };
 
 export function LogViewer({ logs, onClear }: Props) {
   return (
-    <div class="bg-slate-900 border border-slate-800 rounded-xl mb-6">
-      <div class="flex items-center justify-between px-5 py-4 border-b border-slate-800">
-        <h2 class="text-base font-semibold">Logs</h2>
+    <div class="bg-surface-alt border border-border rounded-xl mb-6">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-border">
+        <h2 class="text-base font-semibold text-fg">Logs</h2>
         <button
           onClick={onClear}
-          class="px-3 py-1.5 text-sm rounded-lg bg-slate-800 border border-slate-700 hover:bg-slate-700 transition-colors"
+          class="px-3 py-1.5 text-sm rounded-lg bg-surface-hover border border-border hover:bg-surface-active transition-colors text-fg-secondary"
         >
           Clear
         </button>
       </div>
-      <div class="p-4 max-h-72 overflow-y-auto font-mono text-xs bg-slate-950">
+      <div class="p-4 max-h-72 overflow-y-auto font-mono text-xs bg-surface">
         {logs.length === 0 ? (
-          <div class="text-slate-500 text-center py-4">No logs</div>
+          <div class="text-fg-faint text-center py-4">No logs</div>
         ) : (
           logs.map((l, i) => (
-            <div key={i} class="py-0.5 border-b border-slate-900">
-              <span class="text-slate-500">[{l.time}]</span>{' '}
-              <span class={levelColor[l.level] ?? 'text-slate-300'}>{l.message}</span>
+            <div key={i} class="py-0.5 border-b border-border">
+              <span class="text-fg-faint">[{l.time}]</span>{' '}
+              <span class={levelColor[l.level] ?? 'text-fg-secondary'}>{l.message}</span>
             </div>
           ))
         )}

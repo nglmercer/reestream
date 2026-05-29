@@ -98,20 +98,20 @@ export function RecordingControls({ addLog }: Props) {
   const pastRecordings = recordings.filter((r) => r.status !== 'recording');
 
   return (
-    <div class="bg-slate-900 border border-slate-800 rounded-xl mb-6">
-      <div class="flex items-center justify-between px-5 py-4 border-b border-slate-800">
-        <h2 class="text-base font-semibold">Recordings</h2>
+    <div class="bg-surface-alt border border-border rounded-xl mb-6">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-border">
+        <h2 class="text-base font-semibold text-fg">Recordings</h2>
         <div class="flex items-center gap-2">
           <button
             onClick={refresh}
-            class="px-3 py-1.5 text-sm rounded-lg bg-slate-800 border border-slate-700 hover:bg-slate-700 transition-colors"
+            class="px-3 py-1.5 text-sm rounded-lg bg-surface-hover border border-border hover:bg-surface-active transition-colors text-fg-secondary"
           >
             Refresh
           </button>
           <button
             onClick={handleStart}
             disabled={recording}
-            class="px-3 py-1.5 text-sm rounded-lg bg-red-600 hover:bg-red-500 disabled:bg-slate-700 disabled:text-slate-500 text-white transition-colors flex items-center gap-1.5"
+            class="px-3 py-1.5 text-sm rounded-lg bg-danger hover:opacity-90 disabled:bg-surface-active disabled:text-fg-faint text-white transition-colors flex items-center gap-1.5"
           >
             <span class="w-2 h-2 rounded-full bg-white animate-pulse" style={{ display: recording ? 'none' : 'block' }} />
             {recording ? 'Starting…' : 'Record'}
@@ -120,27 +120,27 @@ export function RecordingControls({ addLog }: Props) {
       </div>
 
       <div class="p-4">
-        {/* Active recordings */}
         {activeRecordings.length > 0 && (
           <div class="mb-4">
-            <div class="text-xs text-slate-500 uppercase tracking-wider mb-2">Active</div>
+            <div class="text-xs text-fg-faint uppercase tracking-wider mb-2">Active</div>
             {activeRecordings.map((r) => (
               <div
                 key={r.id}
-                class="flex items-center justify-between bg-red-900/20 border border-red-800/30 rounded-lg px-4 py-3 mb-2"
+                class="flex items-center justify-between rounded-lg px-4 py-3 mb-2 border"
+                style={{ backgroundColor: 'var(--danger-bg)', borderColor: 'var(--danger)' }}
               >
                 <div class="flex items-center gap-3">
-                  <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                  <span class="w-2 h-2 rounded-full bg-danger animate-pulse" />
                   <div>
-                    <div class="text-sm text-slate-200">{r.filename}</div>
-                    <div class="text-xs text-slate-500">
+                    <div class="text-sm text-fg">{r.filename}</div>
+                    <div class="text-xs text-fg-faint">
                       {formatDuration(r.started_at)} · {r.format.toUpperCase()}
                     </div>
                   </div>
                 </div>
                 <button
                   onClick={() => handleStop(r.id)}
-                  class="px-3 py-1 text-xs rounded bg-red-600 hover:bg-red-500 text-white transition-colors"
+                  class="px-3 py-1 text-xs rounded bg-danger hover:opacity-90 text-white transition-colors"
                 >
                   Stop
                 </button>
@@ -149,25 +149,24 @@ export function RecordingControls({ addLog }: Props) {
           </div>
         )}
 
-        {/* Past recordings */}
         {pastRecordings.length > 0 && (
           <div>
-            <div class="text-xs text-slate-500 uppercase tracking-wider mb-2">History</div>
+            <div class="text-xs text-fg-faint uppercase tracking-wider mb-2">History</div>
             <div class="space-y-1 max-h-48 overflow-y-auto">
               {pastRecordings.map((r) => (
                 <div
                   key={r.id}
-                  class="flex items-center justify-between bg-slate-800 rounded-lg px-4 py-2"
+                  class="flex items-center justify-between bg-surface-raised rounded-lg px-4 py-2 border border-border"
                 >
                   <div>
-                    <div class="text-sm text-slate-300">{r.filename}</div>
-                    <div class="text-xs text-slate-500">
+                    <div class="text-sm text-fg-secondary">{r.filename}</div>
+                    <div class="text-xs text-fg-faint">
                       {r.status} · {r.format.toUpperCase()} · {formatSize(r.size_bytes)}
                     </div>
                   </div>
                   <button
                     onClick={() => handleDelete(r.id)}
-                    class="px-2 py-1 text-xs rounded text-red-400 hover:bg-red-900/30 transition-colors"
+                    class="px-2 py-1 text-xs rounded text-danger hover:bg-danger-bg transition-colors"
                   >
                     Delete
                   </button>
@@ -177,15 +176,14 @@ export function RecordingControls({ addLog }: Props) {
           </div>
         )}
 
-        {/* Empty state */}
         {!loading && recordings.length === 0 && (
-          <div class="text-center py-6 text-slate-500 text-sm">
+          <div class="text-center py-6 text-fg-faint text-sm">
             No recordings. Click "Record" to start capturing the stream.
           </div>
         )}
 
         {loading && (
-          <div class="text-center py-6 text-slate-500 text-sm animate-pulse">Loading…</div>
+          <div class="text-center py-6 text-fg-faint text-sm animate-pulse">Loading…</div>
         )}
       </div>
     </div>

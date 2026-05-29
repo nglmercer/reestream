@@ -24,16 +24,17 @@ export function App() {
   const [wsConnected, setWsConnected] = useState(false);
 
   useEffect(() => {
-    fetch('/api/setup/status')
+    const ctrl = new AbortController();
+    fetch('/api/setup/status', { signal: ctrl.signal })
       .then((r) => r.json())
       .then((d) => {
         if (d.success) setNeedsSetup(d.data.first_run);
         else setNeedsSetup(false);
       })
       .catch(() => setNeedsSetup(false));
+    return () => ctrl.abort();
   }, []);
 
-  // WebSocket for real-time stream updates
   useStreamWs({
     onInit: (streams) => {
       setLiveStreams(streams as StreamInfo[]);
@@ -71,7 +72,6 @@ export function App() {
     },
   });
 
-  // Fallback polling if WebSocket not connected
   const fetchStreams = useCallback(async (): Promise<StreamInfo[]> => {
     const res = await api.getStreams();
     if (!res.success || !res.data) throw new Error(res.error ?? 'Failed to fetch streams');
@@ -94,7 +94,6 @@ export function App() {
   const streamsPoll = usePolling(fetchStreams, 10_000);
   const platforms = usePolling(fetchPlatforms, PLATFORMS_POLL);
 
-  // Use WebSocket streams when connected, otherwise fallback to polling
   const streams = wsConnected ? { data: liveStreams, loading: false, refresh: streamsPoll.refresh } : streamsPoll;
 
   const handleToggle = useCallback(
@@ -152,16 +151,14 @@ export function App() {
   if (status.error) addLog(`Status error: ${status.error}`, 'error');
   if (platforms.error) addLog(`Platforms error: ${platforms.error}`, 'error');
 
-  // Show setup wizard on first run
   if (needsSetup === true) {
     return <SetupWizard />;
   }
 
-  // Loading state
   if (needsSetup === null) {
     return (
-      <div class="min-h-screen bg-slate-950 flex items-center justify-center">
-        <div class="text-slate-500 animate-pulse">Loading…</div>
+      <div class="min-h-screen bg-surface flex items-center justify-center">
+        <div class="text-fg-muted animate-pulse">Loading…</div>
       </div>
     );
   }
@@ -173,7 +170,7 @@ export function App() {
   }));
 
   return (
-    <div class="min-h-screen bg-slate-950">
+    <div class="min-h-screen bg-surface">
       <Header
         version={status.data?.version ?? '…'}
         onSettings={() => setShowSettings(true)}

@@ -28,7 +28,6 @@ export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd,
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
 
-  // Edit state
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [editUrl, setEditUrl] = useState('');
@@ -100,28 +99,27 @@ export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd,
   }, [editingId, editName, editUrl, editKey, editEnabled, onUpdate, cancelEdit]);
 
   return (
-    <div class="bg-slate-900 border border-slate-800 rounded-xl mb-6">
-      <div class="flex items-center justify-between px-5 py-4 border-b border-slate-800">
-        <h2 class="text-base font-semibold">Platforms</h2>
+    <div class="bg-surface-alt border border-border rounded-xl mb-6">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-border">
+        <h2 class="text-base font-semibold text-fg">Platforms</h2>
         <div class="flex items-center gap-2">
           <button
             onClick={onRefresh}
-            class="px-3 py-1.5 text-sm rounded-lg bg-slate-800 border border-slate-700 hover:bg-slate-700 transition-colors"
+            class="px-3 py-1.5 text-sm rounded-lg bg-surface-hover border border-border hover:bg-surface-active transition-colors text-fg-secondary"
           >
             Refresh
           </button>
           <button
             onClick={() => setShowAdd(!showAdd)}
-            class="px-3 py-1.5 text-sm rounded-lg bg-sky-600 hover:bg-sky-500 text-white transition-colors"
+            class="px-3 py-1.5 text-sm rounded-lg bg-accent hover:bg-accent-hover text-white transition-colors"
           >
             {showAdd ? 'Cancel' : '+ Add Platform'}
           </button>
         </div>
       </div>
 
-      {/* Add form */}
       {showAdd && (
-        <div class="px-5 py-4 border-b border-slate-800 bg-slate-900/50">
+        <div class="px-5 py-4 border-b border-border bg-surface-alt">
           <div class="flex flex-wrap gap-2 mb-3">
             {PRESETS.map((p) => (
               <button
@@ -129,8 +127,8 @@ export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd,
                 onClick={() => handlePreset(p)}
                 class={`px-2.5 py-1 text-xs rounded-lg border transition-colors ${
                   addName === p.name
-                    ? 'bg-sky-600 border-sky-500 text-white'
-                    : 'bg-slate-800 border-slate-700 hover:border-sky-500 text-slate-300'
+                    ? 'bg-accent border-accent text-white'
+                    : 'bg-surface-hover border-border hover:border-accent text-fg-secondary'
                 }`}
               >
                 {p.name}
@@ -142,26 +140,26 @@ export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd,
               value={addName}
               onInput={(e) => setAddName((e.target as HTMLInputElement).value)}
               placeholder="Name"
-              class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-sky-500"
+              class="bg-surface-input border border-border rounded-lg px-3 py-2 text-sm text-fg focus:outline-none focus:border-accent"
             />
             <input
               value={addUrl}
               onInput={(e) => setAddUrl((e.target as HTMLInputElement).value)}
               placeholder="rtmp://server/app"
-              class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-sky-500"
+              class="bg-surface-input border border-border rounded-lg px-3 py-2 text-sm text-fg focus:outline-none focus:border-accent"
             />
             <input
               value={addKey}
               onInput={(e) => setAddKey((e.target as HTMLInputElement).value)}
               placeholder="Stream key"
               type="password"
-              class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-sky-500"
+              class="bg-surface-input border border-border rounded-lg px-3 py-2 text-sm text-fg focus:outline-none focus:border-accent"
             />
           </div>
           <button
             onClick={handleAdd}
             disabled={adding || !addName || !addUrl || !addKey}
-            class="px-4 py-2 text-sm rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:text-slate-500 text-white transition-colors"
+            class="px-4 py-2 text-sm rounded-lg bg-success hover:opacity-90 disabled:bg-surface-active disabled:text-fg-faint text-white transition-colors"
           >
             {adding ? 'Adding…' : 'Add Platform'}
           </button>
@@ -171,44 +169,43 @@ export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd,
       <div class="overflow-x-auto">
         <table class="w-full text-sm">
           <thead>
-            <tr class="text-left text-xs uppercase tracking-wider text-slate-500">
-              <th class="px-5 py-3 border-b border-slate-800">ID</th>
-              <th class="px-5 py-3 border-b border-slate-800">Name</th>
-              <th class="px-5 py-3 border-b border-slate-800">URL</th>
-              <th class="px-5 py-3 border-b border-slate-800">Key</th>
-              <th class="px-5 py-3 border-b border-slate-800">Enabled</th>
-              <th class="px-5 py-3 border-b border-slate-800">Actions</th>
+            <tr class="text-left text-xs uppercase tracking-wider text-fg-faint">
+              <th class="px-5 py-3 border-b border-border">ID</th>
+              <th class="px-5 py-3 border-b border-border">Name</th>
+              <th class="px-5 py-3 border-b border-border">URL</th>
+              <th class="px-5 py-3 border-b border-border">Key</th>
+              <th class="px-5 py-3 border-b border-border">Enabled</th>
+              <th class="px-5 py-3 border-b border-border">Actions</th>
             </tr>
           </thead>
           <tbody>
             {loading && platforms.length === 0 ? (
               <tr>
-                <td colSpan={6} class="px-5 py-10 text-center text-slate-500">Loading…</td>
+                <td colSpan={6} class="px-5 py-10 text-center text-fg-faint">Loading…</td>
               </tr>
             ) : platforms.length === 0 ? (
               <tr>
-                <td colSpan={6} class="px-5 py-10 text-center text-slate-500">
+                <td colSpan={6} class="px-5 py-10 text-center text-fg-faint">
                   No platforms. Click "+ Add Platform" to add one.
                 </td>
               </tr>
             ) : (
               platforms.map((p) =>
                 editingId === p.id ? (
-                  /* Edit row */
-                  <tr key={p.id} class="bg-slate-800/50">
-                    <td class="px-5 py-2 font-mono text-xs text-slate-400">{p.id.slice(0, 8)}…</td>
+                  <tr key={p.id} class="bg-surface-hover">
+                    <td class="px-5 py-2 font-mono text-xs text-fg-muted">{p.id.slice(0, 8)}…</td>
                     <td class="px-5 py-2">
                       <input
                         value={editName}
                         onInput={(e) => setEditName((e.target as HTMLInputElement).value)}
-                        class="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-sm text-slate-200 focus:outline-none focus:border-sky-500"
+                        class="w-full bg-surface-active border border-border-strong rounded px-2 py-1 text-sm text-fg focus:outline-none focus:border-accent"
                       />
                     </td>
                     <td class="px-5 py-2">
                       <input
                         value={editUrl}
                         onInput={(e) => setEditUrl((e.target as HTMLInputElement).value)}
-                        class="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-sm text-slate-200 focus:outline-none focus:border-sky-500"
+                        class="w-full bg-surface-active border border-border-strong rounded px-2 py-1 text-sm text-fg focus:outline-none focus:border-accent"
                       />
                     </td>
                     <td class="px-5 py-2">
@@ -216,7 +213,7 @@ export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd,
                         value={editKey}
                         onInput={(e) => setEditKey((e.target as HTMLInputElement).value)}
                         type="password"
-                        class="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-sm text-slate-200 focus:outline-none focus:border-sky-500"
+                        class="w-full bg-surface-active border border-border-strong rounded px-2 py-1 text-sm text-fg focus:outline-none focus:border-accent"
                       />
                     </td>
                     <td class="px-5 py-2">
@@ -224,8 +221,8 @@ export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd,
                         onClick={() => setEditEnabled(!editEnabled)}
                         class={`px-2 py-0.5 rounded text-xs font-semibold cursor-pointer transition-colors ${
                           editEnabled
-                            ? 'bg-emerald-900/60 text-emerald-400'
-                            : 'bg-slate-700 text-slate-400 border border-slate-600'
+                            ? 'bg-success-bg text-success'
+                            : 'bg-surface-active text-fg-muted border border-border-strong'
                         }`}
                       >
                         {editEnabled ? 'Yes' : 'No'}
@@ -236,13 +233,13 @@ export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd,
                         <button
                           onClick={handleSave}
                           disabled={saving}
-                          class="px-3 py-1 text-xs rounded bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 text-white transition-colors"
+                          class="px-3 py-1 text-xs rounded bg-success hover:opacity-90 disabled:bg-surface-active text-white transition-colors"
                         >
                           {saving ? '…' : 'Save'}
                         </button>
                         <button
                           onClick={cancelEdit}
-                          class="px-3 py-1 text-xs rounded bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
+                          class="px-3 py-1 text-xs rounded bg-surface-hover hover:bg-surface-active border border-border text-fg-secondary transition-colors"
                         >
                           Cancel
                         </button>
@@ -250,19 +247,18 @@ export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd,
                     </td>
                   </tr>
                 ) : (
-                  /* Normal row */
-                  <tr key={p.id} class="hover:bg-slate-800/50 transition-colors">
-                    <td class="px-5 py-3 font-mono text-xs text-slate-400">{p.id.slice(0, 8)}…</td>
-                    <td class="px-5 py-3">{p.name}</td>
-                    <td class="px-5 py-3 font-mono text-xs text-slate-400">{p.url}</td>
-                    <td class="px-5 py-3 font-mono text-xs text-slate-500">{'•'.repeat(Math.min(p.key.length, 8))}</td>
+                  <tr key={p.id} class="hover:bg-surface-hover transition-colors">
+                    <td class="px-5 py-3 font-mono text-xs text-fg-muted">{p.id.slice(0, 8)}…</td>
+                    <td class="px-5 py-3 text-fg">{p.name}</td>
+                    <td class="px-5 py-3 font-mono text-xs text-fg-muted">{p.url}</td>
+                    <td class="px-5 py-3 font-mono text-xs text-fg-faint">{'•'.repeat(Math.min(p.key.length, 8))}</td>
                     <td class="px-5 py-3">
                       <button
                         onClick={() => onToggle(p.id)}
                         class={`inline-block px-2 py-0.5 rounded text-xs font-semibold cursor-pointer transition-colors ${
                           p.enabled
-                            ? 'bg-emerald-900/60 text-emerald-400 hover:bg-emerald-900/80'
-                            : 'bg-slate-800 text-slate-400 border border-slate-700 hover:bg-slate-700'
+                            ? 'bg-success-bg text-success hover:opacity-80'
+                            : 'bg-surface-hover text-fg-muted border border-border hover:bg-surface-active'
                         }`}
                       >
                         {p.enabled ? 'Yes' : 'No'}
@@ -272,14 +268,15 @@ export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd,
                       <div class="flex items-center gap-2">
                         <button
                           onClick={() => startEdit(p)}
-                          class="px-3 py-1 text-xs rounded bg-sky-600/20 border border-sky-600/30 text-sky-400 hover:bg-sky-600/30 transition-colors"
+                          class="px-3 py-1 text-xs rounded border border-accent text-accent hover:bg-accent-bg transition-colors"
                         >
                           Edit
                         </button>
                         <button
                           onClick={() => handleRemove(p.id, p.name)}
                           disabled={removing === p.id}
-                          class="px-3 py-1 text-xs rounded bg-red-900/30 border border-red-800/50 text-red-400 hover:bg-red-900/50 disabled:opacity-50 transition-colors"
+                          class="px-3 py-1 text-xs rounded border text-danger hover:bg-danger-bg disabled:opacity-50 transition-colors"
+                          style={{ borderColor: 'var(--danger)' }}
                         >
                           {removing === p.id ? '…' : 'Remove'}
                         </button>

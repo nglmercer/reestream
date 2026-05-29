@@ -1,3 +1,5 @@
+import { useTheme } from '../hooks/useTheme';
+
 interface Props {
   version: string;
   onSettings: () => void;
@@ -5,20 +7,47 @@ interface Props {
 }
 
 export function Header({ version, onSettings, wsConnected }: Props) {
+  const { theme, toggle } = useTheme();
+
   return (
-    <header class="bg-slate-900 border-b border-slate-800 px-6 py-4 flex items-center justify-between">
-      <h1 class="text-lg font-bold text-sky-400">Reestream Dashboard</h1>
+    <header class="bg-surface-alt border-b border-border px-6 py-4 flex items-center justify-between">
+      <h1 class="text-lg font-bold text-accent">Reestream Dashboard</h1>
       <div class="flex items-center gap-3">
         {wsConnected !== undefined && (
           <span
-            class={`w-2 h-2 rounded-full ${wsConnected ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`}
+            class={`w-2 h-2 rounded-full ${wsConnected ? 'bg-success' : 'bg-warning animate-pulse'}`}
             title={wsConnected ? 'Live updates connected' : 'Reconnecting…'}
           />
         )}
-        <span class="text-sm text-slate-500">v{version}</span>
+        <span class="text-sm text-fg-faint">v{version}</span>
+        <button
+          onClick={toggle}
+          class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-surface-hover text-fg-muted hover:text-fg transition-colors"
+          title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+        >
+          {theme === 'dark' ? (
+            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"
+              />
+            </svg>
+          ) : (
+            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"
+              />
+            </svg>
+          )}
+        </button>
         <button
           onClick={onSettings}
-          class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors"
+          class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-surface-hover text-fg-muted hover:text-fg transition-colors"
           title="Settings"
         >
           <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">

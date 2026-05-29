@@ -1,1 +1,90 @@
 @import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-surface: var(--surface);
+  --color-surface-alt: var(--surface-alt);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-hover: var(--surface-hover);
+  --color-surface-active: var(--surface-active);
+  --color-surface-input: var(--surface-input);
+  --color-border: var(--border-color);
+  --color-border-strong: var(--border-strong);
+  --color-fg: var(--fg);
+  --color-fg-secondary: var(--fg-secondary);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-faint: var(--fg-faint);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-bg: var(--accent-bg);
+  --color-danger: var(--danger);
+  --color-danger-bg: var(--danger-bg);
+  --color-success: var(--success);
+  --color-success-bg: var(--success-bg);
+  --color-warning: var(--warning);
+  --color-warning-bg: var(--warning-bg);
+  --color-overlay: var(--overlay);
+}
+
+:root {
+  --surface: #ffffff;
+  --surface-alt: #f8fafc;
+  --surface-raised: #ffffff;
+  --surface-hover: #f1f5f9;
+  --surface-active: #e2e8f0;
+  --surface-input: #f1f5f9;
+  --border-color: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --fg: #0f172a;
+  --fg-secondary: #334155;
+  --fg-muted: #64748b;
+  --fg-faint: #94a3b8;
+  --accent: #0284c7;
+  --accent-hover: #0369a1;
+  --accent-bg: rgba(2, 132, 199, 0.1);
+  --danger: #dc2626;
+  --danger-bg: rgba(220, 38, 38, 0.08);
+  --success: #059669;
+  --success-bg: rgba(5, 150, 105, 0.08);
+  --warning: #d97706;
+  --warning-bg: rgba(217, 119, 6, 0.08);
+  --overlay: rgba(0, 0, 0, 0.5);
+  color-scheme: light;
+}
+
+.dark {
+  --surface: #020617;
+  --surface-alt: #0f172a;
+  --surface-raised: #1e293b;
+  --surface-hover: #1e293b;
+  --surface-active: #334155;
+  --surface-input: #0f172a;
+  --border-color: #1e293b;
+  --border-strong: #334155;
+  --fg: #e2e8f0;
+  --fg-secondary: #cbd5e1;
+  --fg-muted: #94a3b8;
+  --fg-faint: #475569;
+  --accent: #38bdf8;
+  --accent-hover: #7dd3fc;
+  --accent-bg: rgba(56, 189, 248, 0.1);
+  --danger: #f87171;
+  --danger-bg: rgba(248, 113, 113, 0.1);
+  --success: #34d399;
+  --success-bg: rgba(52, 211, 153, 0.1);
+  --warning: #fbbf24;
+  --warning-bg: rgba(251, 191, 36, 0.1);
+  --overlay: rgba(0, 0, 0, 0.6);
+  color-scheme: dark;
+}
+
+body {
+  background-color: var(--surface);
+  color: var(--fg);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}

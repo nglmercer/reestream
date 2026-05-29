@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'preact/hooks';
+import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
 
 interface ServerInfo {
   rtmp_url: string;
@@ -29,17 +29,25 @@ export function SettingsPanel({ onClose, addLog }: Props) {
   const [loading, setLoading] = useState(true);
   const [resetting, setResetting] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    Promise.all([
-      fetch('/api/setup/info').then((r) => r.json()),
-    ])
-      .then(([infoRes]) => {
+    const ctrl = new AbortController();
+    fetch('/api/setup/info', { signal: ctrl.signal })
+      .then((r) => r.json())
+      .then((infoRes) => {
         if (infoRes.success) setInfo(infoRes.data);
       })
       .catch(() => addLog('Failed to load server info', 'error'))
       .finally(() => setLoading(false));
+    return () => ctrl.abort();
   }, [addLog]);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
 
   const handleRevealKey = useCallback(async () => {
     if (streamKey) {
@@ -81,26 +89,24 @@ export function SettingsPanel({ onClose, addLog }: Props) {
   const copyToClipboard = useCallback(async (text: string, label: string) => {
     try {
       await navigator.clipboard.writeText(text);
-      setCopied(label);
-      setTimeout(() => setCopied(null), 1500);
     } catch {
-      // Fallback
       const ta = document.createElement('textarea');
       ta.value = text;
       document.body.appendChild(ta);
       ta.select();
       document.execCommand('copy');
       document.body.removeChild(ta);
-      setCopied(label);
-      setTimeout(() => setCopied(null), 1500);
     }
+    setCopied(label);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setCopied(null), 1500);
   }, []);
 
   if (loading) {
     return (
-      <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-8">
-          <div class="text-slate-400 animate-pulse">Loading settings…</div>
+      <div class="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'var(--overlay)' }}>
+        <div class="bg-surface-alt border border-border rounded-2xl p-8">
+          <div class="text-fg-muted animate-pulse">Loading settings…</div>
         </div>
       </div>
     );
@@ -120,17 +126,16 @@ export function SettingsPanel({ onClose, addLog }: Props) {
     : [];
 
   return (
-    <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
+    <div class="fixed inset-0 flex items-center justify-center z-50 p-4" style={{ backgroundColor: 'var(--overlay)' }} onClick={onClose}>
       <div
-        class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto"
+        class="bg-surface-alt border border-border rounded-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
-        <div class="flex items-center justify-between px-6 py-4 border-b border-slate-800 sticky top-0 bg-slate-900 z-10">
-          <h2 class="text-lg font-bold">Settings</h2>
+        <div class="flex items-center justify-between px-6 py-4 border-b border-border sticky top-0 bg-surface-alt z-10">
+          <h2 class="text-lg font-bold text-fg">Settings</h2>
           <button
             onClick={onClose}
-            class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors"
+            class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-surface-hover text-fg-muted hover:text-fg transition-colors"
           >
             <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -139,17 +144,16 @@ export function SettingsPanel({ onClose, addLog }: Props) {
         </div>
 
         <div class="p-6 space-y-6">
-          {/* Stream Key Section */}
           <div>
-            <h3 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Stream Key</h3>
-            <div class="bg-slate-800 rounded-xl p-4 border border-slate-700">
+            <h3 class="text-sm font-semibold text-fg-muted uppercase tracking-wider mb-3">Stream Key</h3>
+            <div class="bg-surface-raised rounded-xl p-4 border border-border">
               <div class="flex items-center gap-3 mb-3">
-                <div class="flex-1 font-mono text-sm bg-slate-950 rounded-lg px-4 py-2.5 border border-slate-700">
+                <div class="flex-1 font-mono text-sm bg-surface rounded-lg px-4 py-2.5 border border-border text-fg">
                   {showKey && streamKey ? streamKey : info?.stream_key_masked ?? '****'}
                 </div>
                 <button
                   onClick={handleRevealKey}
-                  class="px-3 py-2.5 text-xs rounded-lg bg-slate-700 hover:bg-slate-600 transition-colors whitespace-nowrap"
+                  class="px-3 py-2.5 text-xs rounded-lg bg-surface-hover hover:bg-surface-active border border-border transition-colors text-fg-secondary whitespace-nowrap"
                 >
                   {showKey ? 'Hide' : 'Reveal'}
                 </button>
@@ -158,7 +162,7 @@ export function SettingsPanel({ onClose, addLog }: Props) {
                     const key = streamKey ?? info?.stream_key_masked ?? '';
                     copyToClipboard(key, 'key');
                   }}
-                  class="px-3 py-2.5 text-xs rounded-lg bg-slate-700 hover:bg-slate-600 transition-colors whitespace-nowrap"
+                  class="px-3 py-2.5 text-xs rounded-lg bg-surface-hover hover:bg-surface-active border border-border transition-colors text-fg-secondary whitespace-nowrap"
                 >
                   {copied === 'key' ? 'Copied!' : 'Copy'}
                 </button>
@@ -166,37 +170,37 @@ export function SettingsPanel({ onClose, addLog }: Props) {
               <button
                 onClick={handleResetKey}
                 disabled={resetting}
-                class="w-full px-4 py-2 text-sm rounded-lg bg-red-900/30 border border-red-800/50 text-red-400 hover:bg-red-900/50 disabled:opacity-50 transition-colors"
+                class="w-full px-4 py-2 text-sm rounded-lg border text-danger disabled:opacity-50 transition-colors"
+                style={{ backgroundColor: 'var(--danger-bg)', borderColor: 'var(--danger)' }}
               >
                 {resetting ? 'Resetting…' : 'Reset Stream Key'}
               </button>
-              <p class="text-xs text-slate-500 mt-2">
+              <p class="text-xs text-fg-faint mt-2">
                 Resetting generates a new key. Update your streaming software immediately.
               </p>
             </div>
           </div>
 
-          {/* Endpoints Section */}
           <div>
-            <h3 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">
+            <h3 class="text-sm font-semibold text-fg-muted uppercase tracking-wider mb-3">
               Server Endpoints
             </h3>
             <div class="space-y-2">
               {endpoints.filter((ep) => ep.value != null).map((ep) => (
                 <div
                   key={ep.label}
-                  class="bg-slate-800 rounded-lg px-4 py-3 border border-slate-700 flex items-center justify-between gap-3"
+                  class="bg-surface-raised rounded-lg px-4 py-3 border border-border flex items-center justify-between gap-3"
                 >
                   <div class="min-w-0">
                     <div class="flex items-center gap-2">
-                      <span class="text-sm font-medium text-slate-200">{ep.label}</span>
-                      <span class="text-xs text-slate-500">{ep.note}</span>
+                      <span class="text-sm font-medium text-fg">{ep.label}</span>
+                      <span class="text-xs text-fg-faint">{ep.note}</span>
                     </div>
-                    <div class="font-mono text-xs text-sky-400 truncate mt-0.5">{ep.value}</div>
+                    <div class="font-mono text-xs text-accent truncate mt-0.5">{ep.value}</div>
                   </div>
                   <button
                     onClick={() => copyToClipboard(ep.value!, ep.label)}
-                    class="shrink-0 px-2 py-1 text-xs rounded bg-slate-700 hover:bg-slate-600 transition-colors"
+                    class="shrink-0 px-2 py-1 text-xs rounded bg-surface-hover hover:bg-surface-active border border-border transition-colors text-fg-secondary"
                   >
                     {copied === ep.label ? 'Copied!' : 'Copy'}
                   </button>
@@ -205,40 +209,30 @@ export function SettingsPanel({ onClose, addLog }: Props) {
             </div>
           </div>
 
-          {/* OBS Instructions */}
           <div>
-            <h3 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">
+            <h3 class="text-sm font-semibold text-fg-muted uppercase tracking-wider mb-3">
               Quick Setup (OBS / Streamlabs)
             </h3>
-            <div class="bg-slate-800 rounded-xl p-4 border border-slate-700 space-y-3">
+            <div class="bg-surface-raised rounded-xl p-4 border border-border space-y-3">
+              {[
+                'Open OBS → Settings → Stream',
+                'Service: Custom',
+              ].map((text, i) => (
+                <div key={i} class="flex items-start gap-3">
+                  <span class="shrink-0 w-6 h-6 rounded-full bg-accent text-white text-xs flex items-center justify-center font-bold">{i + 1}</span>
+                  <div class="text-sm text-fg">{text}</div>
+                </div>
+              ))}
               <div class="flex items-start gap-3">
-                <span class="shrink-0 w-6 h-6 rounded-full bg-sky-600 text-white text-xs flex items-center justify-center font-bold">1</span>
-                <div>
-                  <div class="text-sm text-slate-200">Open OBS → Settings → Stream</div>
+                <span class="shrink-0 w-6 h-6 rounded-full bg-accent text-white text-xs flex items-center justify-center font-bold">3</span>
+                <div class="text-sm text-fg">
+                  Server: <code class="text-accent bg-surface px-1.5 py-0.5 rounded text-xs">{info?.rtmp_url ?? 'rtmp://localhost:1935'}</code>
                 </div>
               </div>
               <div class="flex items-start gap-3">
-                <span class="shrink-0 w-6 h-6 rounded-full bg-sky-600 text-white text-xs flex items-center justify-center font-bold">2</span>
-                <div>
-                  <div class="text-sm text-slate-200">
-                    Service: <span class="text-slate-400">Custom</span>
-                  </div>
-                </div>
-              </div>
-              <div class="flex items-start gap-3">
-                <span class="shrink-0 w-6 h-6 rounded-full bg-sky-600 text-white text-xs flex items-center justify-center font-bold">3</span>
-                <div>
-                  <div class="text-sm text-slate-200">
-                    Server: <code class="text-sky-400 bg-slate-900 px-1.5 py-0.5 rounded text-xs">{info?.rtmp_url ?? 'rtmp://localhost:1935'}</code>
-                  </div>
-                </div>
-              </div>
-              <div class="flex items-start gap-3">
-                <span class="shrink-0 w-6 h-6 rounded-full bg-sky-600 text-white text-xs flex items-center justify-center font-bold">4</span>
-                <div>
-                  <div class="text-sm text-slate-200">
-                    Stream Key: <code class="text-sky-400 bg-slate-900 px-1.5 py-0.5 rounded text-xs">{showKey && streamKey ? streamKey : info?.stream_key_masked ?? '****'}</code>
-                  </div>
+                <span class="shrink-0 w-6 h-6 rounded-full bg-accent text-white text-xs flex items-center justify-center font-bold">4</span>
+                <div class="text-sm text-fg">
+                  Stream Key: <code class="text-accent bg-surface px-1.5 py-0.5 rounded text-xs">{showKey && streamKey ? streamKey : info?.stream_key_masked ?? '****'}</code>
                 </div>
               </div>
             </div>
