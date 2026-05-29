@@ -117,7 +117,7 @@ export function VideoPreview({ streams }: Props) {
   const liveStream = streams.find(
     (s) =>
       s.status === "Live" ||
-      (typeof s.status === "object" && "Live" in s.status!),
+      (typeof s.status === "object" && "Live" in s.status),
   );
 
   const streamToWatch = selectedStream || liveStream?.id || "";
