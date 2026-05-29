@@ -7,5 +7,6 @@ export type {
   Platform,
   AddStreamRequest,
   AddPlatformRequest,
+  UpdatePlatformRequest,
   ConfigResponse,
 } from './types';

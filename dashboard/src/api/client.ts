@@ -5,6 +5,7 @@ import type {
   Platform,
   AddStreamRequest,
   AddPlatformRequest,
+  UpdatePlatformRequest,
   ConfigResponse,
 } from './types';
 
@@ -46,10 +47,22 @@ export const api = {
   removePlatform: (id: string) =>
     request<string>(`/api/platforms/${id}`, { method: 'DELETE' }),
 
+  updatePlatform: (id: string, req: UpdatePlatformRequest) =>
+    request<string>(`/api/platforms/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(req),
+    }),
+
   togglePlatform: (id: string) =>
     request<string>(`/api/platforms/${id}/toggle`, { method: 'PUT' }),
 
   getConfig: () => request<ConfigResponse>('/api/config'),
+
+  updateConfig: (req: { rtmp_addr?: string; rtmp_port?: number; stream_key?: string }) =>
+    request<ConfigResponse>('/api/config', {
+      method: 'PUT',
+      body: JSON.stringify(req),
+    }),
 
   reloadConfig: () =>
     request<string>('/api/config/reload', { method: 'POST' }),

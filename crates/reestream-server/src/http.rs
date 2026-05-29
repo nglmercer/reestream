@@ -8,7 +8,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::dashboard;
 use crate::flv::{self, FlvState};
@@ -73,13 +73,6 @@ struct StreamStats {
     uptime_secs: u64,
 }
 
-#[derive(Serialize)]
-struct ConfigResponse {
-    rtmp_addr: String,
-    rtmp_port: u16,
-    platform_count: usize,
-}
-
 #[derive(Deserialize)]
 struct AddPlatformRequest {
     name: String,
@@ -88,15 +81,17 @@ struct AddPlatformRequest {
 }
 
 #[derive(Deserialize)]
-struct AddStreamRequest {
-    name: String,
-    input_url: String,
+struct UpdatePlatformRequest {
+    name: Option<String>,
+    url: Option<String>,
+    key: Option<String>,
+    enabled: Option<bool>,
 }
 
 #[derive(Deserialize)]
-#[allow(dead_code)]
-struct UpdateConfigRequest {
-    stream_key: Option<String>,
+struct AddStreamRequest {
+    name: String,
+    input_url: String,
 }
 
 async fn health() -> impl IntoResponse {
@@ -171,17 +166,83 @@ async fn stream_stats(State(state): State<AppState>, Path(id): Path<String>) -> 
     }
 }
 
-async fn get_config() -> impl IntoResponse {
-    let resp = ConfigResponse {
-        rtmp_addr: "0.0.0.0".into(),
-        rtmp_port: 1935,
-        platform_count: 0,
-    };
-    axum::Json(ApiResponse::ok(resp))
+async fn get_config(State(state): State<AppState>) -> impl IntoResponse {
+    match reestream_core::setup::read_config(&state.config_path) {
+        Ok(config) => {
+            let platforms: Vec<serde_json::Value> = config
+                .platform
+                .unwrap_or_default()
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    serde_json::json!({
+                        "index": i,
+                        "url": p.url.to_string(),
+                        "key_masked": mask_key(&p.key),
+                        "orientation": format!("{:?}", p.orientation).to_lowercase(),
+                    })
+                })
+                .collect();
+
+            axum::Json(ApiResponse::ok(serde_json::json!({
+                "rtmp_addr": config.rtmp_addr,
+                "rtmp_port": config.rtmp_port,
+                "stream_key_masked": mask_key(&config.stream_key),
+                "platform_count": platforms.len(),
+                "platforms": platforms,
+            })))
+            .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(ApiResponse::<()>::err(format!(
+                "Failed to read config: {e}"
+            ))),
+        )
+            .into_response(),
+    }
 }
 
-async fn update_config(axum::Json(_req): axum::Json<UpdateConfigRequest>) -> impl IntoResponse {
-    axum::Json(ApiResponse::ok("config updated"))
+fn mask_key(key: &str) -> String {
+    if key.len() <= 4 {
+        "****".to_string()
+    } else {
+        format!("{}…{}", &key[..4], &key[key.len() - 4..])
+    }
+}
+
+async fn update_config(
+    State(state): State<AppState>,
+    axum::Json(req): axum::Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let rtmp_addr = req.get("rtmp_addr").and_then(|v| v.as_str());
+    let rtmp_port = req
+        .get("rtmp_port")
+        .and_then(|v| v.as_u64())
+        .map(|p| p as u16);
+    let stream_key = req.get("stream_key").and_then(|v| v.as_str());
+
+    match reestream_core::setup::update_config_fields(
+        &state.config_path,
+        rtmp_addr,
+        rtmp_port,
+        stream_key,
+    ) {
+        Ok(config) => {
+            info!("Config updated via API");
+            axum::Json(ApiResponse::ok(serde_json::json!({
+                "rtmp_addr": config.rtmp_addr,
+                "rtmp_port": config.rtmp_port,
+                "platform_count": config.platform.as_ref().map_or(0, |p| p.len()),
+            })))
+            .into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            axum::Json(ApiResponse::<()>::err(format!("Config update failed: {e}"))),
+        )
+            .into_response(),
+    }
 }
 
 async fn reload_config() -> impl IntoResponse {
@@ -278,10 +339,24 @@ async fn add_platform(
     State(state): State<AppState>,
     axum::Json(req): axum::Json<AddPlatformRequest>,
 ) -> impl IntoResponse {
+    // Add to runtime
     let id = state
         .stream_manager
-        .add_platform(req.name, req.url, req.key)
+        .add_platform(req.name.clone(), req.url.clone(), req.key.clone())
         .await;
+
+    // Sync to config.toml
+    if let Err(e) = reestream_core::setup::add_platform_to_config(
+        &state.config_path,
+        &req.url,
+        &req.key,
+        "horizontal",
+    ) {
+        warn!("Failed to sync platform to config: {}", e);
+    } else {
+        info!("Platform added and synced to config.toml");
+    }
+
     (StatusCode::CREATED, axum::Json(ApiResponse::ok(id)))
 }
 
@@ -289,7 +364,21 @@ async fn remove_platform(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    // Find platform index in config before removing from runtime
+    let platforms = state.stream_manager.get_platforms().await;
+    let platform_index = platforms.iter().position(|p| p.id == id);
+
     if state.stream_manager.remove_platform(&id).await {
+        // Sync to config.toml
+        if let Some(idx) = platform_index {
+            if let Err(e) =
+                reestream_core::setup::remove_platform_from_config(&state.config_path, idx)
+            {
+                warn!("Failed to sync platform removal to config: {}", e);
+            } else {
+                info!("Platform removed and synced to config.toml");
+            }
+        }
         (StatusCode::OK, axum::Json(ApiResponse::ok("removed"))).into_response()
     } else {
         (
@@ -308,6 +397,51 @@ async fn toggle_platform(
     if let Some(p) = platforms.iter().find(|p| p.id == id) {
         state.stream_manager.toggle_platform(&id, !p.enabled).await;
         (StatusCode::OK, axum::Json(ApiResponse::ok("toggled"))).into_response()
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            axum::Json(ApiResponse::err("platform not found")),
+        )
+            .into_response()
+    }
+}
+
+async fn update_platform(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    axum::Json(req): axum::Json<UpdatePlatformRequest>,
+) -> impl IntoResponse {
+    // Find platform index in config
+    let platforms = state.stream_manager.get_platforms().await;
+    let platform_index = platforms.iter().position(|p| p.id == id);
+
+    let updated = state
+        .stream_manager
+        .update_platform(
+            &id,
+            req.name.clone(),
+            req.url.clone(),
+            req.key.clone(),
+            req.enabled,
+        )
+        .await;
+
+    if updated {
+        // Sync to config.toml
+        if let Some(idx) = platform_index {
+            if let Err(e) = reestream_core::setup::update_platform_in_config(
+                &state.config_path,
+                idx,
+                req.url.as_deref(),
+                req.key.as_deref(),
+                None,
+            ) {
+                warn!("Failed to sync platform update to config: {}", e);
+            } else {
+                info!("Platform {} updated and synced to config.toml", id);
+            }
+        }
+        (StatusCode::OK, axum::Json(ApiResponse::ok("updated"))).into_response()
     } else {
         (
             StatusCode::NOT_FOUND,
@@ -462,7 +596,10 @@ pub fn create_router(state: AppState) -> Router {
             get(reveal_stream_key).post(reset_stream_key),
         )
         .route("/api/platforms", get(list_platforms).post(add_platform))
-        .route("/api/platforms/{id}", delete(remove_platform))
+        .route(
+            "/api/platforms/{id}",
+            delete(remove_platform).put(update_platform),
+        )
         .route("/api/platforms/{id}/toggle", put(toggle_platform))
         .route("/api/recordings", get(list_recordings))
         .route("/api/recordings/start", post(start_recording))
@@ -539,16 +676,5 @@ mod tests {
         let json = serde_json::to_string(&stats).unwrap();
         assert!(json.contains("test-id"));
         assert!(json.contains("5000"));
-    }
-
-    #[test]
-    fn test_config_response_serialize() {
-        let resp = ConfigResponse {
-            rtmp_addr: "0.0.0.0".into(),
-            rtmp_port: 1935,
-            platform_count: 2,
-        };
-        let json = serde_json::to_string(&resp).unwrap();
-        assert!(json.contains("1935"));
     }
 }

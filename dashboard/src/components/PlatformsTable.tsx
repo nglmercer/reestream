@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'preact/hooks';
-import type { Platform } from '../api';
+import type { Platform, UpdatePlatformRequest } from '../api';
 
 interface Props {
   platforms: Platform[];
@@ -8,6 +8,7 @@ interface Props {
   onToggle: (id: string) => void;
   onAdd: (name: string, url: string, key: string) => Promise<void>;
   onRemove: (id: string) => Promise<void>;
+  onUpdate: (id: string, req: UpdatePlatformRequest) => Promise<void>;
 }
 
 const PRESETS: Array<{ name: string; url: string }> = [
@@ -19,13 +20,21 @@ const PRESETS: Array<{ name: string; url: string }> = [
   { name: 'TikTok', url: 'rtmp://push.tiktok.com/live/' },
 ];
 
-export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd, onRemove }: Props) {
+export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd, onRemove, onUpdate }: Props) {
   const [showAdd, setShowAdd] = useState(false);
   const [addName, setAddName] = useState('');
   const [addUrl, setAddUrl] = useState('');
   const [addKey, setAddKey] = useState('');
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
+
+  // Edit state
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editUrl, setEditUrl] = useState('');
+  const [editKey, setEditKey] = useState('');
+  const [editEnabled, setEditEnabled] = useState(true);
+  const [saving, setSaving] = useState(false);
 
   const handlePreset = useCallback((preset: (typeof PRESETS)[number]) => {
     setAddName(preset.name);
@@ -58,6 +67,37 @@ export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd,
     },
     [onRemove],
   );
+
+  const startEdit = useCallback((p: Platform) => {
+    setEditingId(p.id);
+    setEditName(p.name);
+    setEditUrl(p.url);
+    setEditKey(p.key);
+    setEditEnabled(p.enabled);
+  }, []);
+
+  const cancelEdit = useCallback(() => {
+    setEditingId(null);
+    setEditName('');
+    setEditUrl('');
+    setEditKey('');
+  }, []);
+
+  const handleSave = useCallback(async () => {
+    if (!editingId) return;
+    setSaving(true);
+    try {
+      await onUpdate(editingId, {
+        name: editName,
+        url: editUrl,
+        key: editKey,
+        enabled: editEnabled,
+      });
+      cancelEdit();
+    } finally {
+      setSaving(false);
+    }
+  }, [editingId, editName, editUrl, editKey, editEnabled, onUpdate, cancelEdit]);
 
   return (
     <div class="bg-slate-900 border border-slate-800 rounded-xl mb-6">
@@ -135,6 +175,7 @@ export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd,
               <th class="px-5 py-3 border-b border-slate-800">ID</th>
               <th class="px-5 py-3 border-b border-slate-800">Name</th>
               <th class="px-5 py-3 border-b border-slate-800">URL</th>
+              <th class="px-5 py-3 border-b border-slate-800">Key</th>
               <th class="px-5 py-3 border-b border-slate-800">Enabled</th>
               <th class="px-5 py-3 border-b border-slate-800">Actions</th>
             </tr>
@@ -142,43 +183,111 @@ export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd,
           <tbody>
             {loading && platforms.length === 0 ? (
               <tr>
-                <td colSpan={5} class="px-5 py-10 text-center text-slate-500">Loading…</td>
+                <td colSpan={6} class="px-5 py-10 text-center text-slate-500">Loading…</td>
               </tr>
             ) : platforms.length === 0 ? (
               <tr>
-                <td colSpan={5} class="px-5 py-10 text-center text-slate-500">
+                <td colSpan={6} class="px-5 py-10 text-center text-slate-500">
                   No platforms. Click "+ Add Platform" to add one.
                 </td>
               </tr>
             ) : (
-              platforms.map((p) => (
-                <tr key={p.id} class="hover:bg-slate-800/50 transition-colors">
-                  <td class="px-5 py-3 font-mono text-xs text-slate-400">{p.id.slice(0, 8)}…</td>
-                  <td class="px-5 py-3">{p.name}</td>
-                  <td class="px-5 py-3 font-mono text-xs text-slate-400">{p.url}</td>
-                  <td class="px-5 py-3">
-                    <button
-                      onClick={() => onToggle(p.id)}
-                      class={`inline-block px-2 py-0.5 rounded text-xs font-semibold cursor-pointer transition-colors ${
-                        p.enabled
-                          ? 'bg-emerald-900/60 text-emerald-400 hover:bg-emerald-900/80'
-                          : 'bg-slate-800 text-slate-400 border border-slate-700 hover:bg-slate-700'
-                      }`}
-                    >
-                      {p.enabled ? 'Yes' : 'No'}
-                    </button>
-                  </td>
-                  <td class="px-5 py-3">
-                    <button
-                      onClick={() => handleRemove(p.id, p.name)}
-                      disabled={removing === p.id}
-                      class="px-3 py-1 text-xs rounded bg-red-900/30 border border-red-800/50 text-red-400 hover:bg-red-900/50 disabled:opacity-50 transition-colors"
-                    >
-                      {removing === p.id ? '…' : 'Remove'}
-                    </button>
-                  </td>
-                </tr>
-              ))
+              platforms.map((p) =>
+                editingId === p.id ? (
+                  /* Edit row */
+                  <tr key={p.id} class="bg-slate-800/50">
+                    <td class="px-5 py-2 font-mono text-xs text-slate-400">{p.id.slice(0, 8)}…</td>
+                    <td class="px-5 py-2">
+                      <input
+                        value={editName}
+                        onInput={(e) => setEditName((e.target as HTMLInputElement).value)}
+                        class="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-sm text-slate-200 focus:outline-none focus:border-sky-500"
+                      />
+                    </td>
+                    <td class="px-5 py-2">
+                      <input
+                        value={editUrl}
+                        onInput={(e) => setEditUrl((e.target as HTMLInputElement).value)}
+                        class="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-sm text-slate-200 focus:outline-none focus:border-sky-500"
+                      />
+                    </td>
+                    <td class="px-5 py-2">
+                      <input
+                        value={editKey}
+                        onInput={(e) => setEditKey((e.target as HTMLInputElement).value)}
+                        type="password"
+                        class="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-sm text-slate-200 focus:outline-none focus:border-sky-500"
+                      />
+                    </td>
+                    <td class="px-5 py-2">
+                      <button
+                        onClick={() => setEditEnabled(!editEnabled)}
+                        class={`px-2 py-0.5 rounded text-xs font-semibold cursor-pointer transition-colors ${
+                          editEnabled
+                            ? 'bg-emerald-900/60 text-emerald-400'
+                            : 'bg-slate-700 text-slate-400 border border-slate-600'
+                        }`}
+                      >
+                        {editEnabled ? 'Yes' : 'No'}
+                      </button>
+                    </td>
+                    <td class="px-5 py-2">
+                      <div class="flex items-center gap-2">
+                        <button
+                          onClick={handleSave}
+                          disabled={saving}
+                          class="px-3 py-1 text-xs rounded bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 text-white transition-colors"
+                        >
+                          {saving ? '…' : 'Save'}
+                        </button>
+                        <button
+                          onClick={cancelEdit}
+                          class="px-3 py-1 text-xs rounded bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ) : (
+                  /* Normal row */
+                  <tr key={p.id} class="hover:bg-slate-800/50 transition-colors">
+                    <td class="px-5 py-3 font-mono text-xs text-slate-400">{p.id.slice(0, 8)}…</td>
+                    <td class="px-5 py-3">{p.name}</td>
+                    <td class="px-5 py-3 font-mono text-xs text-slate-400">{p.url}</td>
+                    <td class="px-5 py-3 font-mono text-xs text-slate-500">{'•'.repeat(Math.min(p.key.length, 8))}</td>
+                    <td class="px-5 py-3">
+                      <button
+                        onClick={() => onToggle(p.id)}
+                        class={`inline-block px-2 py-0.5 rounded text-xs font-semibold cursor-pointer transition-colors ${
+                          p.enabled
+                            ? 'bg-emerald-900/60 text-emerald-400 hover:bg-emerald-900/80'
+                            : 'bg-slate-800 text-slate-400 border border-slate-700 hover:bg-slate-700'
+                        }`}
+                      >
+                        {p.enabled ? 'Yes' : 'No'}
+                      </button>
+                    </td>
+                    <td class="px-5 py-3">
+                      <div class="flex items-center gap-2">
+                        <button
+                          onClick={() => startEdit(p)}
+                          class="px-3 py-1 text-xs rounded bg-sky-600/20 border border-sky-600/30 text-sky-400 hover:bg-sky-600/30 transition-colors"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => handleRemove(p.id, p.name)}
+                          disabled={removing === p.id}
+                          class="px-3 py-1 text-xs rounded bg-red-900/30 border border-red-800/50 text-red-400 hover:bg-red-900/50 disabled:opacity-50 transition-colors"
+                        >
+                          {removing === p.id ? '…' : 'Remove'}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ),
+              )
             )}
           </tbody>
         </table>

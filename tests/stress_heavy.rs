@@ -78,9 +78,10 @@ async fn stress_rapid_connect_disconnect() {
     );
 }
 
+#[cfg(feature = "core")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stress_concurrent_config_reads() {
-    use reestream_core::config::ConfigBuilder;
+    use reestream::config::ConfigBuilder;
 
     let config = Arc::new(ConfigBuilder::new().stream_key("test").build());
 
@@ -102,9 +103,10 @@ async fn stress_concurrent_config_reads() {
     }
 }
 
+#[cfg(any(feature = "hls", feature = "api"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stress_platform_list_contention() {
-    use reestream_server::stream::StreamManager;
+    use reestream::http_server::stream::StreamManager;
 
     let manager = Arc::new(StreamManager::new());
 

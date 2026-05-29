@@ -45,8 +45,22 @@ export interface AddPlatformRequest {
   key: string;
 }
 
+export interface UpdatePlatformRequest {
+  name?: string;
+  url?: string;
+  key?: string;
+  enabled?: boolean;
+}
+
 export interface ConfigResponse {
   rtmp_addr: string;
   rtmp_port: number;
+  stream_key_masked: string;
   platform_count: number;
+  platforms: Array<{
+    index: number;
+    url: string;
+    key_masked: string;
+    orientation: string;
+  }>;
 }

@@ -41,6 +41,14 @@ pub struct AddPlatformRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct UpdatePlatformRequest {
+    pub name: Option<String>,
+    pub url: Option<String>,
+    pub key: Option<String>,
+    pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AddStreamRequest {
     pub name: String,
     pub input_url: String,

@@ -93,6 +93,19 @@ export function App() {
     [addLog, platforms],
   );
 
+  const handleUpdatePlatform = useCallback(
+    async (id: string, req: { name?: string; url?: string; key?: string; enabled?: boolean }) => {
+      const res = await api.updatePlatform(id, req);
+      if (res.success) {
+        addLog('Platform updated');
+        platforms.refresh();
+      } else {
+        addLog(`Update failed: ${res.error}`, 'error');
+      }
+    },
+    [addLog, platforms],
+  );
+
   if (status.error) addLog(`Status error: ${status.error}`, 'error');
   if (streams.error) addLog(`Streams error: ${streams.error}`, 'error');
   if (platforms.error) addLog(`Platforms error: ${platforms.error}`, 'error');
@@ -139,6 +152,7 @@ export function App() {
           onToggle={handleToggle}
           onAdd={handleAddPlatform}
           onRemove={handleRemovePlatform}
+          onUpdate={handleUpdatePlatform}
         />
         <LogViewer logs={logs} onClear={clearLogs} />
       </main>

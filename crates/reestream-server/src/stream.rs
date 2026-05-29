@@ -105,6 +105,34 @@ impl StreamManager {
             platform.enabled = enabled;
         }
     }
+
+    pub async fn update_platform(
+        &self,
+        id: &str,
+        name: Option<String>,
+        url: Option<String>,
+        key: Option<String>,
+        enabled: Option<bool>,
+    ) -> bool {
+        let mut platforms = self.platforms.write().await;
+        if let Some(platform) = platforms.iter_mut().find(|p| p.id == id) {
+            if let Some(n) = name {
+                platform.name = n;
+            }
+            if let Some(u) = url {
+                platform.url = u;
+            }
+            if let Some(k) = key {
+                platform.key = k;
+            }
+            if let Some(e) = enabled {
+                platform.enabled = e;
+            }
+            true
+        } else {
+            false
+        }
+    }
 }
 
 #[cfg(test)]
@@ -192,5 +220,87 @@ mod tests {
         let status = StreamStatus::Live;
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("Live"));
+    }
+
+    #[tokio::test]
+    async fn test_update_platform_name() {
+        let manager = StreamManager::new();
+        let id = manager
+            .add_platform("Twitch".into(), "rtmp://twitch.tv".into(), "key".into())
+            .await;
+        let updated = manager
+            .update_platform(&id, Some("New Name".into()), None, None, None)
+            .await;
+        assert!(updated);
+        let platforms = manager.get_platforms().await;
+        assert_eq!(platforms[0].name, "New Name");
+        assert_eq!(platforms[0].url, "rtmp://twitch.tv");
+    }
+
+    #[tokio::test]
+    async fn test_update_platform_url_and_key() {
+        let manager = StreamManager::new();
+        let id = manager
+            .add_platform("Twitch".into(), "rtmp://twitch.tv".into(), "key".into())
+            .await;
+        let updated = manager
+            .update_platform(
+                &id,
+                None,
+                Some("rtmp://new.server/app".into()),
+                Some("new-key".into()),
+                None,
+            )
+            .await;
+        assert!(updated);
+        let platforms = manager.get_platforms().await;
+        assert_eq!(platforms[0].url, "rtmp://new.server/app");
+        assert_eq!(platforms[0].key, "new-key");
+    }
+
+    #[tokio::test]
+    async fn test_update_platform_enabled() {
+        let manager = StreamManager::new();
+        let id = manager
+            .add_platform("Twitch".into(), "rtmp://twitch.tv".into(), "key".into())
+            .await;
+        let updated = manager
+            .update_platform(&id, None, None, None, Some(false))
+            .await;
+        assert!(updated);
+        let platforms = manager.get_platforms().await;
+        assert!(!platforms[0].enabled);
+    }
+
+    #[tokio::test]
+    async fn test_update_platform_all_fields() {
+        let manager = StreamManager::new();
+        let id = manager
+            .add_platform("Twitch".into(), "rtmp://twitch.tv".into(), "key".into())
+            .await;
+        let updated = manager
+            .update_platform(
+                &id,
+                Some("YouTube".into()),
+                Some("rtmp://youtube.com/live2".into()),
+                Some("yt-key".into()),
+                Some(false),
+            )
+            .await;
+        assert!(updated);
+        let platforms = manager.get_platforms().await;
+        assert_eq!(platforms[0].name, "YouTube");
+        assert_eq!(platforms[0].url, "rtmp://youtube.com/live2");
+        assert_eq!(platforms[0].key, "yt-key");
+        assert!(!platforms[0].enabled);
+    }
+
+    #[tokio::test]
+    async fn test_update_platform_not_found() {
+        let manager = StreamManager::new();
+        let updated = manager
+            .update_platform("nonexistent", Some("test".into()), None, None, None)
+            .await;
+        assert!(!updated);
     }
 }

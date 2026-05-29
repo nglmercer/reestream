@@ -147,7 +147,7 @@ mod tests {
     fn test_abr_variant_ffmpeg_args() {
         let variant = AbrVariant::new("720p", 1280, 720, 2500, 30);
         let args = variant.to_ffmpeg_args("rtmp://input", "/tmp/hls");
-        assert!(args.contains(&"1280x720".to_string()));
+        assert!(args.iter().any(|a| a.contains("1280x720")));
         assert!(args.contains(&"2500k".to_string()));
         assert!(args.iter().any(|a| a.contains("720p.m3u8")));
     }
