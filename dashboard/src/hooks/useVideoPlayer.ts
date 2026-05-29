@@ -108,6 +108,10 @@ export function useVideoPlayer(opts: UsePlayerOptions): UsePlayerReturn {
         while (el.firstChild) {
           el.removeChild(el.firstChild);
         }
+        if (el.readyState === 0) {
+          resolve();
+          return;
+        }
         const onEmptied = () => {
           el.removeEventListener('emptied', onEmptied);
           resolve();
