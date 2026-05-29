@@ -11,7 +11,7 @@ use rml_rtmp::sessions::{ClientSessionResult, ServerSessionEvent, ServerSessionR
 use rml_rtmp::time::RtmpTimestamp;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::{RwLock, mpsc, broadcast};
+use tokio::sync::{RwLock, broadcast, mpsc};
 use tokio::time::timeout;
 use tracing::{error, info, warn};
 use url::Url;
@@ -343,7 +343,10 @@ async fn forward_to_push_clients(
                             platform_id_from(p.url.as_str(), &p.key) == p_platform_id && p.enabled
                         });
                         if !platform_still_enabled {
-                            info!("Platform {} is no longer enabled, abandoning reconnection", p_platform_id);
+                            info!(
+                                "Platform {} is no longer enabled, abandoning reconnection",
+                                p_platform_id
+                            );
                             break;
                         }
                     }
