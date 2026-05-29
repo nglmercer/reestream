@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'preact/hooks';
+import { useLocale } from '../hooks/useLocale';
 
 interface LogEntry {
   time: string;
@@ -18,20 +19,22 @@ const levelColor: Record<string, string> = {
 };
 
 export function LogViewer({ logs, onClear }: Props) {
+  const { t } = useLocale();
+
   return (
     <div class="bg-surface-alt border border-border rounded-xl mb-6">
       <div class="flex items-center justify-between px-5 py-4 border-b border-border">
-        <h2 class="text-base font-semibold text-fg">Logs</h2>
+        <h2 class="text-base font-semibold text-fg">{t('logs.title')}</h2>
         <button
           onClick={onClear}
           class="px-3 py-1.5 text-sm rounded-lg bg-surface-hover border border-border hover:bg-surface-active transition-colors text-fg-secondary"
         >
-          Clear
+          {t('logs.clear')}
         </button>
       </div>
       <div class="p-4 max-h-72 overflow-y-auto font-mono text-xs bg-surface">
         {logs.length === 0 ? (
-          <div class="text-fg-faint text-center py-4">No logs</div>
+          <div class="text-fg-faint text-center py-4">{t('logs.empty')}</div>
         ) : (
           logs.map((l, i) => (
             <div key={i} class="py-0.5 border-b border-border">

@@ -1,19 +1,22 @@
 import type { ServerStatus } from '../api';
+import { useLocale } from '../hooks/useLocale';
 
 interface Props {
   status: ServerStatus | null;
   loading: boolean;
 }
 
-function formatUptime(secs: number): string {
-  if (secs < 60) return `${secs}s`;
-  if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+function formatUptime(secs: number, t: (k: string, p?: Record<string, string | number>) => string): string {
+  if (secs < 60) return t('time.seconds', { n: secs });
+  if (secs < 3600) return t('time.minutesSeconds', { m: Math.floor(secs / 60), s: secs % 60 });
   const h = Math.floor(secs / 3600);
   const m = Math.floor((secs % 3600) / 60);
-  return `${h}h ${m}m`;
+  return t('time.hoursMinutes', { h, m });
 }
 
 export function StatsCards({ status, loading }: Props) {
+  const { t } = useLocale();
+
   if (loading && !status) {
     return (
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
@@ -28,12 +31,12 @@ export function StatsCards({ status, loading }: Props) {
   }
 
   const cards = [
-    { label: 'Uptime', value: status ? formatUptime(status.uptime_seconds) : '--' },
-    { label: 'Active Streams', value: status ? String(status.active_streams) : '0' },
-    { label: 'Total Viewers', value: status ? String(status.total_viewers) : '0' },
+    { label: t('stats.uptime'), value: status ? formatUptime(status.uptime_seconds, t) : t('stats.fallback') },
+    { label: t('stats.activeStreams'), value: status ? String(status.active_streams) : '0' },
+    { label: t('stats.totalViewers'), value: status ? String(status.total_viewers) : '0' },
     {
-      label: 'Status',
-      value: status ? 'Online' : '--',
+      label: t('stats.status'),
+      value: status ? t('stats.online') : t('stats.fallback'),
       color: status ? 'text-success' : 'text-fg-faint',
     },
   ];

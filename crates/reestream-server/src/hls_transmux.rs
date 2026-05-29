@@ -159,17 +159,17 @@ mod tests {
         let segment_dir = PathBuf::from("/tmp/reestream_test_hls_segments");
         let _ = tokio::fs::remove_dir_all(&segment_dir).await;
 
-        let transmuxer = HlsTransmuxer::new(
-            segment_dir.clone(),
-            segment_dir.join("stream.m3u8"),
-        );
+        let transmuxer = HlsTransmuxer::new(segment_dir.clone(), segment_dir.join("stream.m3u8"));
 
         // Start the transmuxer (this should create the directory)
         let result = transmuxer.start().await;
 
         // The result depends on whether ffmpeg is available
         if which_ffmpeg().await.is_ok() {
-            assert!(result.is_ok(), "Should start successfully when ffmpeg is available");
+            assert!(
+                result.is_ok(),
+                "Should start successfully when ffmpeg is available"
+            );
         }
 
         // Clean up

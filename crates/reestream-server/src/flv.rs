@@ -204,9 +204,8 @@ mod tests {
         assert_eq!(tag_data[6], 0xE8); // Timestamp byte 0
 
         // Verify data size encoding
-        let data_size = ((tag_data[1] as u32) << 16)
-            | ((tag_data[2] as u32) << 8)
-            | (tag_data[3] as u32);
+        let data_size =
+            ((tag_data[1] as u32) << 16) | ((tag_data[2] as u32) << 8) | (tag_data[3] as u32);
         assert_eq!(data_size, video_data.len() as u32);
     }
 

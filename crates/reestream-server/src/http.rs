@@ -576,7 +576,9 @@ async fn hls_segment(
     let path = segment_dir.join(&filename);
     if path.exists() {
         match tokio::fs::read(&path).await {
-            Ok(data) => return (StatusCode::OK, [("content-type", "video/mp2t")], data).into_response(),
+            Ok(data) => {
+                return (StatusCode::OK, [("content-type", "video/mp2t")], data).into_response();
+            }
             Err(_) => return StatusCode::NOT_FOUND.into_response(),
         }
     }
@@ -854,11 +856,21 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
-            response.headers().get("content-type").unwrap().to_str().unwrap(),
+            response
+                .headers()
+                .get("content-type")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "video/x-flv"
         );
         assert_eq!(
-            response.headers().get("cache-control").unwrap().to_str().unwrap(),
+            response
+                .headers()
+                .get("cache-control")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "no-cache"
         );
     }
