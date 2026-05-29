@@ -1,0 +1,13 @@
+rtmp_addr = "0.0.0.0"
+rtmp_port = 1935
+stream_key = "test-key-123"
+
+[[platform]]
+url = "rtmp://127.0.0.1:1936/live/test1"
+key = "platform-key-1"
+orientation = "horizontal"
+
+[[platform]]
+url = "rtmp://127.0.0.1:1937/live/test2"
+key = "platform-key-2"
+orientation = "vertical"

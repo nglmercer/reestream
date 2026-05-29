@@ -126,6 +126,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(any(feature = "hls", feature = "api"))]
     let stream_manager: Option<Arc<reestream::http_server::stream::StreamManager>> = {
         let sm = Arc::new(reestream::http_server::stream::StreamManager::new());
+        if let Some(ref config_platforms) = *platform {
+            for cp in config_platforms {
+                let name = cp.url.host_str().unwrap_or("unknown").to_string();
+                sm.add_platform(name, cp.url.to_string(), cp.key.clone())
+                    .await;
+            }
+        }
         let hls_config = reestream::http_server::hls::HlsConfig::default();
         let recording_config = reestream::http_server::recording::RecordingConfig {
             enabled: true,
