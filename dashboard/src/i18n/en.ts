@@ -165,7 +165,7 @@ export const en = {
   'recording.empty': 'No recordings. Click "Record" to start capturing the stream.',
   'recording.loading': 'Loading\u2026',
   'recording.confirmDelete': 'Delete this recording file?',
-  'recording.sizeUnits': [' B', ' KB', ' MB'],
+  'recording.sizeUnits': ' B| KB| MB',
 
   // Log messages
   'log.streamStarted': 'Stream started: {name}',

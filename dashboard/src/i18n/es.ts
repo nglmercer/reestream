@@ -167,7 +167,7 @@ export const es: Record<TranslationKey, string> = {
   'recording.empty': 'Sin grabaciones. Haz clic en "Grabar" para capturar la transmisi\u00f3n.',
   'recording.loading': 'Cargando\u2026',
   'recording.confirmDelete': '\u00bfEliminar este archivo de grabaci\u00f3n?',
-  'recording.sizeUnits': [' B', ' KB', ' MB'],
+  'recording.sizeUnits': ' B| KB| MB',
 
   // Log messages
   'log.streamStarted': 'Transmisi\u00f3n iniciada: {name}',
