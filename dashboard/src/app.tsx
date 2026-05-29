@@ -1,7 +1,7 @@
 import { useCallback, useState, useEffect } from 'preact/hooks';
 import { api } from './api';
 import type { ServerStatus, StreamInfo, Platform } from './api';
-import { usePolling } from './hooks';
+import { usePolling, useStreamWs } from './hooks';
 import { useLogger } from './components/LogViewer';
 import { Header } from './components/Header';
 import { StatsCards } from './components/StatsCards';
@@ -14,13 +14,14 @@ import { SettingsPanel } from './components/SettingsPanel';
 import { RecordingControls } from './components/RecordingControls';
 
 const STATUS_POLL = 5_000;
-const STREAMS_POLL = 10_000;
 const PLATFORMS_POLL = 15_000;
 
 export function App() {
   const { logs, addLog, clearLogs } = useLogger();
   const [needsSetup, setNeedsSetup] = useState<boolean | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [liveStreams, setLiveStreams] = useState<StreamInfo[]>([]);
+  const [wsConnected, setWsConnected] = useState(false);
 
   useEffect(() => {
     fetch('/api/setup/status')
@@ -32,15 +33,54 @@ export function App() {
       .catch(() => setNeedsSetup(false));
   }, []);
 
-  const fetchStatus = useCallback(async (): Promise<ServerStatus> => {
-    const res = await api.getStatus();
-    if (!res.success || !res.data) throw new Error(res.error ?? 'Failed to fetch status');
-    return res.data;
-  }, []);
+  // WebSocket for real-time stream updates
+  useStreamWs({
+    onInit: (streams) => {
+      setLiveStreams(streams as StreamInfo[]);
+      setWsConnected(true);
+    },
+    onStarted: (id, name, input_url) => {
+      addLog(`Stream started: ${name}`);
+      setLiveStreams((prev) => {
+        if (prev.some((s) => s.id === id)) return prev;
+        return [...prev, {
+          id,
+          name,
+          input_url,
+          status: 'Live',
+          started_at: Math.floor(Date.now() / 1000),
+          viewers: 0,
+          bitrate: 0,
+        }];
+      });
+    },
+    onStopped: (id) => {
+      addLog('Stream ended');
+      setLiveStreams((prev) => prev.filter((s) => s.id !== id));
+    },
+    onUpdated: (id, viewers, bitrate) => {
+      setLiveStreams((prev) =>
+        prev.map((s) => (s.id === id ? { ...s, viewers, bitrate } : s)),
+      );
+    },
+    onError: (id, message) => {
+      addLog(`Stream error: ${message}`, 'error');
+      setLiveStreams((prev) =>
+        prev.map((s) => (s.id === id ? { ...s, status: { Error: message } } : s)),
+      );
+    },
+  });
 
+  // Fallback polling if WebSocket not connected
   const fetchStreams = useCallback(async (): Promise<StreamInfo[]> => {
     const res = await api.getStreams();
     if (!res.success || !res.data) throw new Error(res.error ?? 'Failed to fetch streams');
+    return res.data;
+  }, []);
+
+  const fetchStatus = useCallback(async (): Promise<ServerStatus> => {
+    const res = await api.getStatus();
+    if (!res.success || !res.data) throw new Error(res.error ?? 'Failed to fetch status');
     return res.data;
   }, []);
 
@@ -51,8 +91,11 @@ export function App() {
   }, []);
 
   const status = usePolling(fetchStatus, STATUS_POLL);
-  const streams = usePolling(fetchStreams, STREAMS_POLL);
+  const streamsPoll = usePolling(fetchStreams, 10_000);
   const platforms = usePolling(fetchPlatforms, PLATFORMS_POLL);
+
+  // Use WebSocket streams when connected, otherwise fallback to polling
+  const streams = wsConnected ? { data: liveStreams, loading: false, refresh: streamsPoll.refresh } : streamsPoll;
 
   const handleToggle = useCallback(
     async (id: string) => {
@@ -107,7 +150,6 @@ export function App() {
   );
 
   if (status.error) addLog(`Status error: ${status.error}`, 'error');
-  if (streams.error) addLog(`Streams error: ${streams.error}`, 'error');
   if (platforms.error) addLog(`Platforms error: ${platforms.error}`, 'error');
 
   // Show setup wizard on first run
@@ -135,6 +177,7 @@ export function App() {
       <Header
         version={status.data?.version ?? '…'}
         onSettings={() => setShowSettings(true)}
+        wsConnected={wsConnected}
       />
       <main class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
         <StatsCards status={status.data} loading={status.loading} />

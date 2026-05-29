@@ -12,8 +12,10 @@ hls = ["dep:tower-http"]
 api = []
 
 [dependencies]
-axum = "0.8"
+async-trait = "0.1"
+axum = { version = "0.8", features = ["ws"] }
 bytes = "1.10"
+futures-util = "0.3"
 reestream-core = { path = "../reestream-core" }
 reqwest = { version = "0.12.24", default-features = false, features = [
     "json",

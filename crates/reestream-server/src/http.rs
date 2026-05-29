@@ -1,12 +1,15 @@
 use axum::{
     Router,
+    extract::ws::{Message, WebSocket, WebSocketUpgrade},
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{delete, get, post, put},
 };
+use futures_util::{SinkExt, stream::StreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tokio::sync::broadcast;
 use tower_http::cors::CorsLayer;
 use tracing::{info, warn};
 
@@ -537,6 +540,44 @@ async fn flv_stream(State(state): State<AppState>) -> impl IntoResponse {
     flv::flv_stream_impl(state.flv_state).await
 }
 
+async fn ws_streams(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_ws_stream(socket, state))
+}
+
+async fn handle_ws_stream(ws: WebSocket, state: AppState) {
+    let (mut sender, mut _receiver) = ws.split();
+    let mut rx = state.stream_manager.subscribe();
+
+    // Send initial state
+    let streams = state.stream_manager.get_streams().await;
+    let msg = serde_json::json!({
+        "type": "init",
+        "streams": streams,
+    });
+    if let Ok(text) = serde_json::to_string(&msg) {
+        let _ = sender.send(Message::text(text)).await;
+    }
+
+    // Forward events
+    loop {
+        match rx.recv().await {
+            Ok(event) => {
+                let msg = serde_json::json!({
+                    "type": "event",
+                    "event": event,
+                });
+                if let Ok(text) = serde_json::to_string(&msg)
+                    && sender.send(Message::text(text)).await.is_err()
+                {
+                    break;
+                }
+            }
+            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(_) => break,
+        }
+    }
+}
+
 async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
     let streams = state.stream_manager.get_streams().await;
     let total_viewers: u32 = streams.iter().map(|s| s.viewers).sum();
@@ -582,6 +623,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/dashboard", get(dashboard::serve_index))
         .route("/assets/{*path}", get(dashboard::serve_assets))
         .route("/favicon.svg", get(dashboard::serve_favicon))
+        .route("/ws/streams", get(ws_streams))
         .route("/api/status", get(status))
         .route("/api/streams", get(list_streams).post(add_stream))
         .route("/api/streams/{id}", delete(remove_stream))

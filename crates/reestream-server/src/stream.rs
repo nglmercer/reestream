@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, broadcast};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,29 +31,74 @@ pub struct Platform {
     pub enabled: bool,
 }
 
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize)]
+pub enum StreamEvent {
+    Started {
+        id: String,
+        name: String,
+        input_url: String,
+    },
+    Stopped {
+        id: String,
+    },
+    Updated {
+        id: String,
+        viewers: u32,
+        bitrate: u64,
+    },
+    Error {
+        id: String,
+        message: String,
+    },
+}
+
 pub struct StreamManager {
     streams: Arc<RwLock<Vec<StreamInfo>>>,
     platforms: Arc<RwLock<Vec<Platform>>>,
+    event_tx: broadcast::Sender<StreamEvent>,
+}
+
+impl Default for StreamManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl StreamManager {
     pub fn new() -> Self {
-        Self::default()
+        let (event_tx, _) = broadcast::channel(256);
+        Self {
+            streams: Arc::new(RwLock::new(Vec::new())),
+            platforms: Arc::new(RwLock::new(Vec::new())),
+            event_tx,
+        }
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<StreamEvent> {
+        self.event_tx.subscribe()
     }
 
     pub async fn add_stream(&self, name: String, input_url: String) -> String {
         let id = Uuid::new_v4().to_string();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
         let stream = StreamInfo {
             id: id.clone(),
-            name,
-            input_url,
-            status: StreamStatus::Idle,
-            started_at: None,
+            name: name.clone(),
+            input_url: input_url.clone(),
+            status: StreamStatus::Live,
+            started_at: Some(now),
             viewers: 0,
             bitrate: 0,
         };
         self.streams.write().await.push(stream);
+        let _ = self.event_tx.send(StreamEvent::Started {
+            id: id.clone(),
+            name,
+            input_url,
+        });
         id
     }
 
@@ -61,7 +106,13 @@ impl StreamManager {
         let mut streams = self.streams.write().await;
         let len_before = streams.len();
         streams.retain(|s| s.id != id);
-        streams.len() < len_before
+        let removed = streams.len() < len_before;
+        if removed {
+            let _ = self
+                .event_tx
+                .send(StreamEvent::Stopped { id: id.to_string() });
+        }
+        removed
     }
 
     pub async fn get_streams(&self) -> Vec<StreamInfo> {
@@ -72,6 +123,19 @@ impl StreamManager {
         let mut streams = self.streams.write().await;
         if let Some(stream) = streams.iter_mut().find(|s| s.id == id) {
             stream.status = status;
+        }
+    }
+
+    pub async fn update_stream_stats(&self, id: &str, viewers: u32, bitrate: u64) {
+        let mut streams = self.streams.write().await;
+        if let Some(stream) = streams.iter_mut().find(|s| s.id == id) {
+            stream.viewers = viewers;
+            stream.bitrate = bitrate;
+            let _ = self.event_tx.send(StreamEvent::Updated {
+                id: id.to_string(),
+                viewers,
+                bitrate,
+            });
         }
     }
 
@@ -132,6 +196,17 @@ impl StreamManager {
         } else {
             false
         }
+    }
+}
+
+#[async_trait::async_trait]
+impl reestream_core::client::StreamRegistrar for StreamManager {
+    async fn register_stream(&self, name: String, input_url: String) -> String {
+        self.add_stream(name, input_url).await
+    }
+
+    async fn unregister_stream(&self, id: &str) {
+        self.remove_stream(id).await;
     }
 }
 

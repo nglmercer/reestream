@@ -1,13 +1,20 @@
 interface Props {
   version: string;
   onSettings: () => void;
+  wsConnected?: boolean;
 }
 
-export function Header({ version, onSettings }: Props) {
+export function Header({ version, onSettings, wsConnected }: Props) {
   return (
     <header class="bg-slate-900 border-b border-slate-800 px-6 py-4 flex items-center justify-between">
       <h1 class="text-lg font-bold text-sky-400">Reestream Dashboard</h1>
       <div class="flex items-center gap-3">
+        {wsConnected !== undefined && (
+          <span
+            class={`w-2 h-2 rounded-full ${wsConnected ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`}
+            title={wsConnected ? 'Live updates connected' : 'Reconnecting…'}
+          />
+        )}
         <span class="text-sm text-slate-500">v{version}</span>
         <button
           onClick={onSettings}

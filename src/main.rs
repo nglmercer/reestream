@@ -122,8 +122,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let connection_pool = Arc::new(reestream::hardening::ConnectionPool::new(1000));
     let rate_limiter = Arc::new(reestream::hardening::RateLimiter::new(100));
 
+    // Create StreamManager shared between HTTP server and RTMP handler
     #[cfg(any(feature = "hls", feature = "api"))]
-    {
+    let stream_manager: Option<Arc<reestream::http_server::stream::StreamManager>> = {
+        let sm = Arc::new(reestream::http_server::stream::StreamManager::new());
         let hls_config = reestream::http_server::hls::HlsConfig::default();
         let recording_config = reestream::http_server::recording::RecordingConfig {
             enabled: true,
@@ -131,7 +133,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ..Default::default()
         };
         let app_state = reestream::http_server::http::AppState {
-            stream_manager: Arc::new(reestream::http_server::stream::StreamManager::new()),
+            stream_manager: sm.clone(),
             hls_segmenter: Arc::new(reestream::http_server::hls::HlsSegmenter::new(hls_config)),
             flv_state: reestream::http_server::flv::FlvState::default(),
             recording_manager: Arc::new(reestream::http_server::recording::RecordingManager::new(
@@ -148,7 +150,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
         info!("HTTP server starting on 0.0.0.0:8080");
-    }
+        Some(sm)
+    };
+
+    #[cfg(not(any(feature = "hls", feature = "api")))]
+    let stream_manager: Option<Arc<dyn reestream::client::StreamRegistrar>> = None;
 
     if !stream_key.is_empty() {
         info!("Open http://localhost:8080 for the dashboard");
@@ -194,8 +200,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         info!("New incoming connection from {}", peer_addr);
                         let platforms = platforms.clone();
                         let stream_key = stream_key.clone();
+                        let registrar: Option<Arc<dyn reestream::client::StreamRegistrar>> = stream_manager.clone().map(|sm| sm as Arc<dyn reestream::client::StreamRegistrar>);
                         tokio::spawn(async move {
-                            if let Err(e) = handle_publisher(socket, platforms, stream_key).await {
+                            if let Err(e) = handle_publisher(socket, platforms, stream_key, registrar).await {
                                 error!("Error in connection from {}: {:#}", peer_addr, e);
                             } else {
                                 info!("Connection from {} ended correctly", peer_addr);

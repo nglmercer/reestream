@@ -19,6 +19,13 @@ use crate::DynStream;
 use crate::config::Platform;
 use crate::server::handshake_and_create_server_session;
 
+/// Trait for registering active streams (implemented by StreamManager)
+#[async_trait::async_trait]
+pub trait StreamRegistrar: Send + Sync {
+    async fn register_stream(&self, name: String, input_url: String) -> String;
+    async fn unregister_stream(&self, id: &str);
+}
+
 fn is_video_sequence_header(data: &Bytes) -> bool {
     data.len() > 1 && data[0] == 0x17 && data[1] == 0x00
 }
@@ -61,6 +68,7 @@ pub async fn handle_publisher(
     mut inbound: TcpStream,
     platforms: Arc<RwLock<Vec<Platform>>>,
     stream_key_conf: String,
+    stream_manager: Option<Arc<dyn StreamRegistrar>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (mut server_session, leftover) = handshake_and_create_server_session(&mut inbound).await?;
     let (reconnect_tx, mut reconnect_rx) = mpsc::channel::<(usize, PushClient)>(10);
@@ -78,6 +86,7 @@ pub async fn handle_publisher(
     }
 
     let mut read_buf = [0u8; 8192];
+    let mut registered_stream_id: Option<String> = None;
 
     loop {
         tokio::select! {
@@ -92,6 +101,11 @@ pub async fn handle_publisher(
                 let n = match n_res {
                     Ok(0) => {
                         info!("Source stream ended (EOF). Shutting down push clients gracefully...");
+                        // Unregister stream
+                        if let (Some(registrar), Some(id)) = (&stream_manager, &registered_stream_id) {
+                            registrar.unregister_stream(id).await;
+                            info!("Unregistered stream: {}", id);
+                        }
                         for (i, pc) in push_clients.iter().enumerate() {
                             info!("Stopping client {}", i);
                             pc.shutdown().await;
@@ -128,6 +142,15 @@ pub async fn handle_publisher(
                                                 let _ = inbound.write_all(&p.bytes).await;
                                             }
                                         }
+                                    }
+
+                                    // Register stream with StreamManager
+                                    if let Some(ref registrar) = stream_manager {
+                                        let stream_name = format!("RTMP Stream ({})", stream_key);
+                                        let input_url = format!("rtmp://localhost/live/{}", stream_key);
+                                        let id = registrar.register_stream(stream_name, input_url).await;
+                                        registered_stream_id = Some(id.clone());
+                                        info!("Registered stream: {}", id);
                                     }
 
                                     if push_clients.is_empty() {
