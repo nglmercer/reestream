@@ -26,6 +26,11 @@ pub trait StreamRegistrar: Send + Sync {
     async fn unregister_stream(&self, id: &str);
 }
 
+/// Trait for publishing stream data (implemented by DataBus)
+pub trait DataPublisher: Send + Sync {
+    fn publish(&self, stream_id: &str, data: Bytes, is_video: bool, timestamp_ms: u32);
+}
+
 fn is_video_sequence_header(data: &Bytes) -> bool {
     data.len() > 1 && data[0] == 0x17 && data[1] == 0x00
 }
@@ -69,6 +74,7 @@ pub async fn handle_publisher(
     platforms: Arc<RwLock<Vec<Platform>>>,
     stream_key_conf: String,
     stream_manager: Option<Arc<dyn StreamRegistrar>>,
+    data_publisher: Option<Arc<dyn DataPublisher>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (mut server_session, leftover) = handshake_and_create_server_session(&mut inbound).await?;
     let (reconnect_tx, mut reconnect_rx) = mpsc::channel::<(usize, PushClient)>(10);
@@ -176,9 +182,17 @@ pub async fn handle_publisher(
                                 }
                             }
                             ServerSessionEvent::VideoDataReceived { data, timestamp, .. } => {
+                                // Publish to DataBus for HLS/FLV
+                                if let (Some(pubber), Some(sid)) = (&data_publisher, &registered_stream_id) {
+                                    pubber.publish(sid, data.clone(), true, timestamp.value);
+                                }
                                 forward_to_push_clients(&mut push_clients, &reconnect_tx, data, timestamp, true).await;
                             }
                             ServerSessionEvent::AudioDataReceived { data, timestamp, .. } => {
+                                // Publish to DataBus for HLS/FLV
+                                if let (Some(pubber), Some(sid)) = (&data_publisher, &registered_stream_id) {
+                                    pubber.publish(sid, data.clone(), false, timestamp.value);
+                                }
                                 forward_to_push_clients(&mut push_clients, &reconnect_tx, data, timestamp, false).await;
                             }
                             ServerSessionEvent::StreamMetadataChanged { metadata, .. } => {

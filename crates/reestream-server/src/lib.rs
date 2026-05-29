@@ -8,6 +8,7 @@ pub mod api;
 pub mod http;
 
 pub mod dashboard;
+pub mod databus;
 pub mod dvr;
 pub mod flv;
 pub mod recording;

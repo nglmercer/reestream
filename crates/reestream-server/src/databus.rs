@@ -1,0 +1,83 @@
+use bytes::Bytes;
+use std::sync::Arc;
+use tokio::sync::broadcast;
+
+pub struct DataBus {
+    tx: broadcast::Sender<DataPacket>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DataPacket {
+    pub stream_id: String,
+    pub data: Bytes,
+    pub is_video: bool,
+    pub timestamp_ms: u32,
+}
+
+impl DataBus {
+    pub fn new() -> Self {
+        let (tx, _) = broadcast::channel(1024);
+        Self { tx }
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<DataPacket> {
+        self.tx.subscribe()
+    }
+
+    pub fn send(&self, packet: DataPacket) {
+        let _ = self.tx.send(packet);
+    }
+}
+
+impl Default for DataBus {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Clone for DataBus {
+    fn clone(&self) -> Self {
+        Self {
+            tx: self.tx.clone(),
+        }
+    }
+}
+
+impl reestream_core::client::DataPublisher for DataBus {
+    fn publish(&self, stream_id: &str, data: Bytes, is_video: bool, timestamp_ms: u32) {
+        self.send(DataPacket {
+            stream_id: stream_id.to_string(),
+            data,
+            is_video,
+            timestamp_ms,
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_bus_creation() {
+        let bus = DataBus::new();
+        let _rx = bus.subscribe();
+    }
+
+    #[test]
+    fn test_data_bus_send_receive() {
+        let bus = DataBus::new();
+        let mut rx = bus.subscribe();
+
+        bus.send(DataPacket {
+            stream_id: "test".into(),
+            data: Bytes::from_static(&[0x17, 0x00]),
+            is_video: true,
+            timestamp_ms: 0,
+        });
+
+        let packet = rx.try_recv().unwrap();
+        assert_eq!(packet.stream_id, "test");
+        assert!(packet.is_video);
+    }
+}

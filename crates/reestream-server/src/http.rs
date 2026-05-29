@@ -14,6 +14,7 @@ use tower_http::cors::CorsLayer;
 use tracing::{info, warn};
 
 use crate::dashboard;
+use crate::databus::{DataBus, DataPacket};
 use crate::flv::{self, FlvState};
 use crate::hls::HlsSegmenter;
 use crate::recording::RecordingManager;
@@ -24,6 +25,7 @@ pub struct AppState {
     pub stream_manager: Arc<StreamManager>,
     pub hls_segmenter: Arc<HlsSegmenter>,
     pub flv_state: FlvState,
+    pub data_bus: DataBus,
     pub recording_manager: Arc<RecordingManager>,
     pub start_time: std::time::Instant,
     pub config_path: std::path::PathBuf,
@@ -699,6 +701,7 @@ mod tests {
             stream_manager: Arc::new(StreamManager::new()),
             hls_segmenter: Arc::new(HlsSegmenter::new(hls_config)),
             flv_state: FlvState::default(),
+            data_bus: crate::databus::DataBus::default(),
             recording_manager: Arc::new(RecordingManager::new(RecordingConfig::default())),
             start_time: std::time::Instant::now(),
             config_path: std::path::PathBuf::from("/tmp/test_config.toml"),

@@ -122,9 +122,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let connection_pool = Arc::new(reestream::hardening::ConnectionPool::new(1000));
     let rate_limiter = Arc::new(reestream::hardening::RateLimiter::new(100));
 
-    // Create StreamManager shared between HTTP server and RTMP handler
+    // Create StreamManager and DataBus shared between HTTP server and RTMP handler
     #[cfg(any(feature = "hls", feature = "api"))]
-    let stream_manager: Option<Arc<reestream::http_server::stream::StreamManager>> = {
+    let (stream_manager, data_bus): (
+        Option<Arc<reestream::http_server::stream::StreamManager>>,
+        reestream::http_server::databus::DataBus,
+    ) = {
         let sm = Arc::new(reestream::http_server::stream::StreamManager::new());
         if let Some(ref config_platforms) = *platform {
             for cp in config_platforms {
@@ -139,10 +142,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             output_dir: std::path::PathBuf::from("/tmp/reestream/recordings"),
             ..Default::default()
         };
+        let data_bus = reestream::http_server::databus::DataBus::new();
+        let flv_state = reestream::http_server::flv::FlvState::default();
+
+        // Bridge DataBus → FlvState: subscribe to DataBus and feed to FlvState
+        {
+            let mut rx = data_bus.subscribe();
+            let flv = flv_state.clone();
+            tokio::spawn(async move {
+                while let Ok(packet) = rx.recv().await {
+                    flv.push_data(packet.data).await;
+                }
+            });
+        }
+
+        let db = data_bus.clone();
         let app_state = reestream::http_server::http::AppState {
             stream_manager: sm.clone(),
             hls_segmenter: Arc::new(reestream::http_server::hls::HlsSegmenter::new(hls_config)),
-            flv_state: reestream::http_server::flv::FlvState::default(),
+            flv_state,
+            data_bus,
             recording_manager: Arc::new(reestream::http_server::recording::RecordingManager::new(
                 recording_config,
             )),
@@ -157,11 +176,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
         info!("HTTP server starting on 0.0.0.0:8080");
-        Some(sm)
+        (
+            Some(sm),
+            Some(Arc::new(db) as Arc<dyn reestream::client::DataPublisher>),
+        )
     };
 
     #[cfg(not(any(feature = "hls", feature = "api")))]
-    let stream_manager: Option<Arc<dyn reestream::client::StreamRegistrar>> = None;
+    let (stream_manager, data_bus): (
+        Option<Arc<dyn reestream::client::StreamRegistrar>>,
+        Option<Arc<dyn reestream::client::DataPublisher>>,
+    ) = (None, None);
 
     if !stream_key.is_empty() {
         info!("Open http://localhost:8080 for the dashboard");
@@ -208,8 +233,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let platforms = platforms.clone();
                         let stream_key = stream_key.clone();
                         let registrar: Option<Arc<dyn reestream::client::StreamRegistrar>> = stream_manager.clone().map(|sm| sm as Arc<dyn reestream::client::StreamRegistrar>);
+                        let pubber = data_bus.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = handle_publisher(socket, platforms, stream_key, registrar).await {
+                            if let Err(e) = handle_publisher(socket, platforms, stream_key, registrar, pubber).await {
                                 error!("Error in connection from {}: {:#}", peer_addr, e);
                             } else {
                                 info!("Connection from {} ended correctly", peer_addr);

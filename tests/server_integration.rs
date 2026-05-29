@@ -73,6 +73,7 @@ async fn test_graceful_shutdown_with_ctrl_c_simulation() {
                                 platforms,
                                 stream_key,
                                 None,
+                                None,
                             )
                             .await;
                         });
