@@ -1,12 +1,13 @@
 import type { ServerStatus } from '../api';
 import { useLocale } from '../hooks/useLocale';
+import type { TranslationKey } from '../i18n';
 
 interface Props {
   status: ServerStatus | null;
   loading: boolean;
 }
 
-function formatUptime(secs: number, t: (k: string, p?: Record<string, string | number>) => string): string {
+function formatUptime(secs: number, t: (k: TranslationKey, p?: Record<string, string | number>) => string): string {
   if (secs < 60) return t('time.seconds', { n: secs });
   if (secs < 3600) return t('time.minutesSeconds', { m: Math.floor(secs / 60), s: secs % 60 });
   const h = Math.floor(secs / 3600);
