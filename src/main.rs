@@ -152,59 +152,80 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             hls_segment_dir.join("stream.m3u8"),
         );
 
-        // Bridge DataBus → FlvState + HLS transmuxer
+        // Bridge DataBus → FlvState + HLS transmuxer + bitrate
         {
             let mut rx = data_bus.subscribe();
             let flv = flv_state.clone();
             let transmuxer = hls_transmuxer;
+            let sm = sm.clone();
             tokio::spawn(async move {
                 let mut hls_tx: Option<tokio::sync::mpsc::Sender<bytes::Bytes>> = None;
+                let mut bytes_this_second: u64 = 0;
+                let mut bitrate_interval = tokio::time::interval(std::time::Duration::from_secs(1));
+                bitrate_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                let mut current_stream_id: Option<String> = None;
 
-                while let Ok(packet) = rx.recv().await {
-                    // Build FLV tag for FLV state
-                    let tag_type = if packet.is_video { 0x09 } else { 0x08 };
-                    let flv_tag = reestream::http_server::flv::build_flv_tag(
-                        tag_type,
-                        packet.timestamp_ms,
-                        &packet.data,
-                    );
-
-                    // Feed to FLV state
-                    flv.push_data(flv_tag.clone()).await;
-
-                    // Feed to HLS transmuxer (start on first packet if not running)
-                    if hls_tx.is_none() {
-                        match transmuxer.start().await {
-                            Ok(tx) => {
-                                hls_tx = Some(tx);
-                                info!("HLS transmuxer started for stream");
-                            }
-                            Err(e) => {
-                                warn!("Failed to start HLS transmuxer: {e}");
+                loop {
+                    tokio::select! {
+                        biased;
+                        _ = bitrate_interval.tick() => {
+                            if let Some(ref stream_id) = current_stream_id {
+                                let bitrate_kbps = (bytes_this_second * 8) / 1000;
+                                sm.update_stream_stats(stream_id, 0, bitrate_kbps).await;
+                                bytes_this_second = 0;
                             }
                         }
-                    }
+                        result = rx.recv() => {
+                            match result {
+                                Ok(packet) => {
+                                    bytes_this_second += packet.data.len() as u64;
+                                    if current_stream_id.is_none() {
+                                        current_stream_id = Some(packet.stream_id.clone());
+                                    }
 
-                    // Send to HLS transmuxer
-                    if let Some(ref tx) = hls_tx {
-                        if tx.try_send(flv_tag).is_err() {
-                            // Channel full or closed, try to restart
-                            transmuxer.stop().await;
-                            match transmuxer.start().await {
-                                Ok(new_tx) => {
-                                    hls_tx = Some(new_tx);
-                                    info!("HLS transmuxer restarted");
+                                    let tag_type = if packet.is_video { 0x09 } else { 0x08 };
+                                    let flv_tag = reestream::http_server::flv::build_flv_tag(
+                                        tag_type,
+                                        packet.timestamp_ms,
+                                        &packet.data,
+                                    );
+
+                                    flv.push_data(flv_tag.clone()).await;
+
+                                    if hls_tx.is_none() {
+                                        match transmuxer.start().await {
+                                            Ok(tx) => {
+                                                hls_tx = Some(tx);
+                                                info!("HLS transmuxer started for stream");
+                                            }
+                                            Err(e) => {
+                                                warn!("Failed to start HLS transmuxer: {e}");
+                                            }
+                                        }
+                                    }
+
+                                    if let Some(ref tx) = hls_tx {
+                                        if tx.try_send(flv_tag).is_err() {
+                                            transmuxer.stop().await;
+                                            match transmuxer.start().await {
+                                                Ok(new_tx) => {
+                                                    hls_tx = Some(new_tx);
+                                                    info!("HLS transmuxer restarted");
+                                                }
+                                                Err(e) => {
+                                                    warn!("Failed to restart HLS transmuxer: {e}");
+                                                    hls_tx = None;
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
-                                Err(e) => {
-                                    warn!("Failed to restart HLS transmuxer: {e}");
-                                    hls_tx = None;
-                                }
+                                Err(_) => break,
                             }
                         }
                     }
                 }
 
-                // Stream ended, stop transmuxer
                 transmuxer.stop().await;
                 info!("HLS transmuxer stopped (stream ended)");
             });
