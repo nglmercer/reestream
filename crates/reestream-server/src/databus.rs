@@ -1,5 +1,4 @@
 use bytes::Bytes;
-use std::sync::Arc;
 use tokio::sync::broadcast;
 
 pub struct DataBus {

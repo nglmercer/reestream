@@ -126,7 +126,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(any(feature = "hls", feature = "api"))]
     let (stream_manager, data_bus): (
         Option<Arc<reestream::http_server::stream::StreamManager>>,
-        reestream::http_server::databus::DataBus,
+        Option<Arc<dyn reestream::client::DataPublisher>>,
     ) = {
         let sm = Arc::new(reestream::http_server::stream::StreamManager::new());
         if let Some(ref config_platforms) = *platform {
@@ -156,7 +156,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
         }
 
-        let db = data_bus.clone();
+        let data_bus_arc: Arc<dyn reestream::client::DataPublisher> = Arc::new(data_bus.clone());
         let app_state = reestream::http_server::http::AppState {
             stream_manager: sm.clone(),
             hls_segmenter: Arc::new(reestream::http_server::hls::HlsSegmenter::new(hls_config)),
@@ -176,10 +176,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
         info!("HTTP server starting on 0.0.0.0:8080");
-        (
-            Some(sm),
-            Some(Arc::new(db) as Arc<dyn reestream::client::DataPublisher>),
-        )
+        (Some(sm), Some(data_bus_arc))
     };
 
     #[cfg(not(any(feature = "hls", feature = "api")))]

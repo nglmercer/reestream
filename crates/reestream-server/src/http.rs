@@ -14,7 +14,7 @@ use tower_http::cors::CorsLayer;
 use tracing::{info, warn};
 
 use crate::dashboard;
-use crate::databus::{DataBus, DataPacket};
+use crate::databus::DataBus;
 use crate::flv::{self, FlvState};
 use crate::hls::HlsSegmenter;
 use crate::recording::RecordingManager;
