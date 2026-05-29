@@ -11,12 +11,13 @@ use rml_rtmp::sessions::{ClientSessionResult, ServerSessionEvent, ServerSessionR
 use rml_rtmp::time::RtmpTimestamp;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::{RwLock, mpsc, broadcast};
 use tokio::time::timeout;
 use tracing::{error, info, warn};
+use url::Url;
 
 use crate::DynStream;
-use crate::config::Platform;
+use crate::config::{Platform, PlatformEvent, platform_id_from};
 use crate::server::handshake_and_create_server_session;
 
 /// Trait for registering active streams (implemented by StreamManager)
@@ -75,6 +76,7 @@ pub async fn handle_publisher(
     stream_key_conf: String,
     stream_manager: Option<Arc<dyn StreamRegistrar>>,
     data_publisher: Option<Arc<dyn DataPublisher>>,
+    mut platform_events: tokio::sync::broadcast::Receiver<PlatformEvent>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (mut server_session, leftover) = handshake_and_create_server_session(&mut inbound).await?;
     let (reconnect_tx, mut reconnect_rx) = mpsc::channel::<(usize, PushClient)>(10);
@@ -106,6 +108,76 @@ pub async fn handle_publisher(
                 if index < push_clients.len() {
                     info!("Replacing old client with reconnected client at index {}", index);
                     push_clients[index] = new_client;
+                }
+            }
+
+            evt = platform_events.recv() => {
+                match evt {
+                    Ok(PlatformEvent::Toggled { platform_id, url, key, enabled }) => {
+                        if !enabled {
+                            // Shutdown and remove the PushClient for this platform
+                            if let Some(pos) = push_clients.iter().position(|pc| pc.platform_id == platform_id) {
+                                let pc = push_clients.remove(pos);
+                                info!("Platform {} disabled via toggle, shutting down PushClient", platform_id);
+                                pc.shutdown().await;
+                            }
+                        } else {
+                            // Platform enabled: create a new PushClient if we don't already have one
+                            if push_clients.iter().any(|pc| pc.platform_id == platform_id) {
+                                info!("Platform {} already has an active PushClient", platform_id);
+                            } else {
+                                info!("Platform {} enabled, creating new PushClient", platform_id);
+                                let url_parsed = match Url::parse(&url) {
+                                    Ok(u) => u,
+                                    Err(e) => {
+                                        error!("Invalid platform URL '{}': {}", url, e);
+                                        continue;
+                                    }
+                                };
+                                match timeout(Duration::from_secs(5), PushClient::connect_and_publish(&url_parsed, key, None, None, None, platform_id.clone())).await {
+                                    Ok(Ok(pc)) => {
+                                        info!("Connected to newly enabled platform: {} (id={})", url, platform_id);
+                                        push_clients.push(pc);
+                                    },
+                                    _ => error!("Failed to connect to newly enabled platform: {}", url),
+                                }
+                            }
+                        }
+                    }
+                    Ok(PlatformEvent::Added { platform_id, url, key }) => {
+                        // A new platform was added while streaming — connect to it
+                        if push_clients.iter().any(|pc| pc.platform_id == platform_id) {
+                            info!("Platform {} already has an active PushClient", platform_id);
+                        } else {
+                            info!("New platform added, creating PushClient: {}", url);
+                            let url_parsed = match Url::parse(&url) {
+                                Ok(u) => u,
+                                Err(e) => {
+                                    error!("Invalid platform URL '{}': {}", url, e);
+                                    continue;
+                                }
+                            };
+                            match timeout(Duration::from_secs(5), PushClient::connect_and_publish(&url_parsed, key, None, None, None, platform_id.clone())).await {
+                                Ok(Ok(pc)) => {
+                                    info!("Connected to new platform: {} (id={})", url, platform_id);
+                                    push_clients.push(pc);
+                                },
+                                _ => error!("Failed to connect to new platform: {}", url),
+                            }
+                        }
+                    }
+                    Ok(PlatformEvent::Removed { platform_id }) => {
+                        // Platform removed — shutdown and remove the PushClient
+                        if let Some(pos) = push_clients.iter().position(|pc| pc.platform_id == platform_id) {
+                            let pc = push_clients.remove(pos);
+                            info!("Platform {} removed, shutting down PushClient", platform_id);
+                            pc.shutdown().await;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => {
+                        // Event channel closed, continue without platform events
+                    }
                 }
             }
 
@@ -167,9 +239,10 @@ pub async fn handle_publisher(
 
                                     if push_clients.is_empty() {
                                         for p in &pls {
-                                            match timeout(Duration::from_secs(5), PushClient::connect_and_publish(&p.url, p.key.clone(), None, None, None)).await {
+                                            let pid = platform_id_from(p.url.as_str(), &p.key);
+                                            match timeout(Duration::from_secs(5), PushClient::connect_and_publish(&p.url, p.key.clone(), None, None, None, pid.clone())).await {
                                                 Ok(Ok(pc)) => {
-                                                    info!("Connected to platform: {}", p.url);
+                                                    info!("Connected to platform: {} (id={})", p.url, pid);
                                                     push_clients.push(pc);
                                                 },
                                                 _ => error!("Failed to connect to platform: {}", p.url),
@@ -186,14 +259,14 @@ pub async fn handle_publisher(
                                 if let (Some(pubber), Some(sid)) = (&data_publisher, &registered_stream_id) {
                                     pubber.publish(sid, data.clone(), true, timestamp.value);
                                 }
-                                forward_to_push_clients(&mut push_clients, &reconnect_tx, data, timestamp, true).await;
+                                forward_to_push_clients(&mut push_clients, &reconnect_tx, data, timestamp, true, platforms.clone()).await;
                             }
                             ServerSessionEvent::AudioDataReceived { data, timestamp, .. } => {
                                 // Publish to DataBus for HLS/FLV
                                 if let (Some(pubber), Some(sid)) = (&data_publisher, &registered_stream_id) {
                                     pubber.publish(sid, data.clone(), false, timestamp.value);
                                 }
-                                forward_to_push_clients(&mut push_clients, &reconnect_tx, data, timestamp, false).await;
+                                forward_to_push_clients(&mut push_clients, &reconnect_tx, data, timestamp, false, platforms.clone()).await;
                             }
                             ServerSessionEvent::StreamMetadataChanged { metadata, .. } => {
                                 for pc in &push_clients {
@@ -224,6 +297,7 @@ async fn forward_to_push_clients(
     data: Bytes,
     timestamp: RtmpTimestamp,
     is_video: bool,
+    platforms: Arc<RwLock<Vec<Platform>>>,
 ) {
     for (i, pc) in push_clients.iter_mut().enumerate() {
         let mut state = pc.client_state.write().await;
@@ -237,7 +311,9 @@ async fn forward_to_push_clients(
         if pc.tx_feed.is_closed() {
             let p_url = pc.url.clone();
             let p_key = pc.stream_key.clone();
+            let p_platform_id = pc.platform_id.clone();
             let tx_back = reconnect_tx.clone();
+            let platforms_clone = platforms.clone();
 
             let cached_vid = state.video_sequence_header.clone();
             let cached_aud = state.audio_sequence_header.clone();
@@ -260,12 +336,25 @@ async fn forward_to_push_clients(
                 loop {
                     tokio::time::sleep(Duration::from_secs(2)).await;
 
+                    // Check if platform is still enabled before reconnecting
+                    {
+                        let pls = platforms_clone.read().await;
+                        let platform_still_enabled = pls.iter().any(|p| {
+                            platform_id_from(p.url.as_str(), &p.key) == p_platform_id && p.enabled
+                        });
+                        if !platform_still_enabled {
+                            info!("Platform {} is no longer enabled, abandoning reconnection", p_platform_id);
+                            break;
+                        }
+                    }
+
                     match PushClient::connect_and_publish(
                         &p_url,
                         p_key.clone(),
                         cached_vid.clone(),
                         cached_aud.clone(),
                         cached_meta.clone(),
+                        p_platform_id.clone(),
                     )
                     .await
                     {

@@ -55,11 +55,13 @@ impl ClientStateWrapper {
 }
 
 pub struct PushClient {
+    pub platform_id: String,
     pub tx_feed: mpsc::Sender<Bytes>,
     pub client_state: Arc<RwLock<ClientStateWrapper>>,
     pub publish_ready_rx: watch::Receiver<bool>,
     pub url: Url,
     pub stream_key: String,
+    pub shutdown_tx: mpsc::Sender<()>,
     _tasks: Vec<JoinHandle<()>>,
 }
 
@@ -85,6 +87,7 @@ impl PushClient {
         cached_video_header: Option<Bytes>,
         cached_audio_header: Option<Bytes>,
         cached_metadata: Option<StreamMetadata>,
+        platform_id: String,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let host = url.host_str().ok_or("Invalid host")?.to_string();
         let port = url.port_or_known_default().unwrap_or(1935);
@@ -119,6 +122,7 @@ impl PushClient {
         let (mut session, initial_results) = ClientSession::new(client_cfg)?;
         let (tx, mut rx) = mpsc::channel::<Bytes>(256);
         let (kill_tx, mut kill_rx) = mpsc::channel::<()>(1);
+        let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
 
         let (mut rd, mut wr) = tokio::io::split(stream);
 
@@ -168,59 +172,67 @@ impl PushClient {
         let reader_handle = tokio::spawn(async move {
             let mut buf = [0u8; 8192];
             loop {
-                let n = match rd.read(&mut buf).await {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => n,
-                };
+                tokio::select! {
+                    _ = shutdown_rx.recv() => {
+                        info!("External shutdown requested for {}", stream_key_clone);
+                        break;
+                    }
+                    n_res = rd.read(&mut buf) => {
+                        let n = match n_res {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => n,
+                        };
 
-                let mut state = state_clone.write().await;
-                let input_res =
-                    catch_unwind(AssertUnwindSafe(|| state.session.handle_input(&buf[..n])));
+                        let mut state = state_clone.write().await;
+                        let input_res =
+                            catch_unwind(AssertUnwindSafe(|| state.session.handle_input(&buf[..n])));
 
-                let results = match input_res {
-                    Ok(Ok(res)) => res,
-                    _ => break,
-                };
+                        let results = match input_res {
+                            Ok(Ok(res)) => res,
+                            _ => break,
+                        };
 
-                for res in results {
-                    match res {
-                        ClientSessionResult::OutboundResponse(packet) => {
-                            let _ = tx_clone.try_send(Bytes::from(packet.bytes));
+                        for res in results {
+                            match res {
+                                ClientSessionResult::OutboundResponse(packet) => {
+                                    let _ = tx_clone.try_send(Bytes::from(packet.bytes));
+                                }
+                                ClientSessionResult::RaisedEvent(ev) => match ev {
+                                    ClientSessionEvent::ConnectionRequestAccepted => {
+                                        if let Ok(res) = state.session.request_publishing(
+                                            stream_key_clone.clone(),
+                                            PublishRequestType::Live,
+                                        ) {
+                                            Self::send_packet(&tx_clone, res);
+                                        }
+                                    }
+                                    // FIXED: Removed redundant { .. }
+                                    ClientSessionEvent::PublishRequestAccepted => {
+                                        info!("Publish succeeded for remote RTMP");
+                                        let _ = ready_tx.send(true);
+                                        Self::drain_buffers(&mut state, &tx_clone);
+                                    }
+                                    ClientSessionEvent::UnhandleableOnStatusCode { code } => {
+                                        info!("RTMP Status received: {}", code);
+                                        if code.contains("BadName")
+                                            || code.contains("error")
+                                            || code.contains("Failed")
+                                        {
+                                            error!("Stopping stream due to RTMP status: {}", code);
+                                            let _ = kill_tx.send(()).await;
+                                            return;
+                                        }
+                                    }
+                                    ClientSessionEvent::ConnectionRequestRejected { description } => {
+                                        error!("RTMP Connection Rejected: {}", description);
+                                        let _ = kill_tx.send(()).await;
+                                        return;
+                                    }
+                                    _ => trace!("Client Event: {:?}", ev),
+                                },
+                                ClientSessionResult::UnhandleableMessageReceived(_) => {}
+                            }
                         }
-                        ClientSessionResult::RaisedEvent(ev) => match ev {
-                            ClientSessionEvent::ConnectionRequestAccepted => {
-                                if let Ok(res) = state.session.request_publishing(
-                                    stream_key_clone.clone(),
-                                    PublishRequestType::Live,
-                                ) {
-                                    Self::send_packet(&tx_clone, res);
-                                }
-                            }
-                            // FIXED: Removed redundant { .. }
-                            ClientSessionEvent::PublishRequestAccepted => {
-                                info!("Publish succeeded for remote RTMP");
-                                let _ = ready_tx.send(true);
-                                Self::drain_buffers(&mut state, &tx_clone);
-                            }
-                            ClientSessionEvent::UnhandleableOnStatusCode { code } => {
-                                info!("RTMP Status received: {}", code);
-                                if code.contains("BadName")
-                                    || code.contains("error")
-                                    || code.contains("Failed")
-                                {
-                                    error!("Stopping stream due to RTMP status: {}", code);
-                                    let _ = kill_tx.send(()).await;
-                                    return;
-                                }
-                            }
-                            ClientSessionEvent::ConnectionRequestRejected { description } => {
-                                error!("RTMP Connection Rejected: {}", description);
-                                let _ = kill_tx.send(()).await;
-                                return;
-                            }
-                            _ => trace!("Client Event: {:?}", ev),
-                        },
-                        ClientSessionResult::UnhandleableMessageReceived(_) => {}
                     }
                 }
             }
@@ -229,11 +241,13 @@ impl PushClient {
         });
 
         Ok(Self {
+            platform_id,
             tx_feed: tx,
             client_state,
             publish_ready_rx: ready_rx,
             url: url.clone(),
             stream_key,
+            shutdown_tx,
             _tasks: vec![writer_handle, reader_handle],
         })
     }

@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, broadcast};
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
@@ -13,6 +13,7 @@ use reestream::config::Config;
 type StreamManagerPair = (
     Option<Arc<dyn reestream::client::StreamRegistrar>>,
     Option<Arc<dyn reestream::client::DataPublisher>>,
+    Option<tokio::sync::broadcast::Receiver<reestream::config::PlatformEvent>>,
 );
 
 #[derive(clap::Parser)]
@@ -129,8 +130,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create StreamManager and DataBus shared between HTTP server and RTMP handler
     #[cfg(any(feature = "hls", feature = "api"))]
-    let (stream_manager, data_bus): StreamManagerPair = {
+    let (stream_manager, data_bus, platform_event_rx): StreamManagerPair = {
         let sm = Arc::new(reestream::http_server::stream::StreamManager::new());
+        let platform_event_rx = sm.subscribe_platform_events();
         if let Some(ref config_platforms) = *platform {
             for cp in config_platforms {
                 let name = cp.url.host_str().unwrap_or("unknown").to_string();
@@ -222,7 +224,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                     }
                                 }
-                                Err(_) => break,
+                                Err(broadcast::error::RecvError::Lagged(n)) => {
+                                    warn!("DataBus receiver lagged by {} messages, continuing", n);
+                                }
+                                Err(broadcast::error::RecvError::Closed) => {
+                                    info!("DataBus channel closed, stopping bridge");
+                                    break;
+                                }
                             }
                         }
                     }
@@ -253,11 +261,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
         info!("HTTP server starting on 0.0.0.0:8080");
-        (Some(sm), Some(data_bus_arc))
+        (Some(sm), Some(data_bus_arc), Some(platform_event_rx))
     };
 
     #[cfg(not(any(feature = "hls", feature = "api")))]
-    let (stream_manager, data_bus): StreamManagerPair = (None, None);
+    let (stream_manager, data_bus, platform_event_rx): StreamManagerPair = {
+        let (_, rx) = tokio::sync::broadcast::channel(1);
+        (None, None, Some(rx))
+    };
 
     if !stream_key.is_empty() {
         info!("Open http://localhost:8080 for the dashboard");
@@ -305,8 +316,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let stream_key = stream_key.clone();
                         let registrar: Option<Arc<dyn reestream::client::StreamRegistrar>> = stream_manager.clone().map(|sm| sm as Arc<dyn reestream::client::StreamRegistrar>);
                         let pubber = data_bus.clone();
+                        let pev = platform_event_rx.as_ref().unwrap().resubscribe();
                         tokio::spawn(async move {
-                            if let Err(e) = handle_publisher(socket, platforms, stream_key, registrar, pubber).await {
+                            if let Err(e) = handle_publisher(socket, platforms, stream_key, registrar, pubber, pev).await {
                                 error!("Error in connection from {}: {:#}", peer_addr, e);
                             } else {
                                 info!("Connection from {} ended correctly", peer_addr);

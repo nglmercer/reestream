@@ -79,11 +79,11 @@ export function useVideoPlayer(opts: UsePlayerOptions): UsePlayerReturn {
     function destroyFlv() {
       if (flvPlayerRef.current) {
         try {
-          if (typeof flvPlayerRef.current.detachMediaElement === 'function') {
-            flvPlayerRef.current.detachMediaElement();
-          }
           if (typeof flvPlayerRef.current.destroy === 'function') {
             flvPlayerRef.current.destroy();
+          }
+          if (typeof flvPlayerRef.current.detachMediaElement === 'function') {
+            flvPlayerRef.current.detachMediaElement();
           }
         } catch {}
         flvPlayerRef.current = null;
@@ -140,10 +140,10 @@ export function useVideoPlayer(opts: UsePlayerOptions): UsePlayerReturn {
           },
           {
             enableWorker: false,
-            enableStashBuffer: false,
-            stashInitialSize: 128,
+            enableStashBuffer: true,
+            stashInitialSize: 384,
             lazyLoad: false,
-            lazyLoadMaxDuration: 0.2,
+            lazyLoadMaxDuration: 0.5,
             deferLoadAfterSourceOpen: false,
             autoCleanupSourceBuffer: true,
             autoCleanupMaxBackwardDuration: 3,
@@ -244,22 +244,18 @@ export function useVideoPlayer(opts: UsePlayerOptions): UsePlayerReturn {
 
       if (currentInitId !== initIdRef.current) return;
 
-      requestAnimationFrame(() => {
-        if (currentInitId !== initIdRef.current) return;
-
-        if (isFlv) {
-          initFlv();
-        } else if (isHls) {
-          initHls();
-        } else {
-          el.src = opts.url;
-          el.load();
-          if (opts.autoplay !== false) {
-            el.play().catch(() => {});
-          }
-          setPlayerType('native');
+      if (isFlv) {
+        initFlv();
+      } else if (isHls) {
+        initHls();
+      } else {
+        el.src = opts.url;
+        el.load();
+        if (opts.autoplay !== false) {
+          el.play().catch(() => {});
         }
-      });
+        setPlayerType('native');
+      }
     })();
 
     const onPlay = () => setPlaying(true);

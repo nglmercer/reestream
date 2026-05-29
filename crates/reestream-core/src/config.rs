@@ -34,6 +34,44 @@ pub enum Orientation {
     Vertical,
 }
 
+#[derive(Debug, Clone)]
+pub enum PlatformEvent {
+    Toggled {
+        platform_id: String,
+        url: String,
+        key: String,
+        enabled: bool,
+    },
+    Added {
+        platform_id: String,
+        url: String,
+        key: String,
+    },
+    Removed {
+        platform_id: String,
+    },
+}
+
+impl PlatformEvent {
+    pub fn platform_id(&self) -> &str {
+        match self {
+            PlatformEvent::Toggled { platform_id, .. } => platform_id,
+            PlatformEvent::Added { platform_id, .. } => platform_id,
+            PlatformEvent::Removed { platform_id } => platform_id,
+        }
+    }
+}
+
+/// Generate a stable platform ID from URL + key.
+pub fn platform_id_from(url: &str, key: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    url.hash(&mut hasher);
+    key.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
 pub struct ConfigBuilder {
     rtmp_addr: String,
     rtmp_port: u16,

@@ -1,3 +1,4 @@
+use reestream_core::config::{PlatformEvent, platform_id_from};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast};
@@ -56,6 +57,7 @@ pub struct StreamManager {
     streams: Arc<RwLock<Vec<StreamInfo>>>,
     platforms: Arc<RwLock<Vec<Platform>>>,
     event_tx: broadcast::Sender<StreamEvent>,
+    platform_event_tx: broadcast::Sender<PlatformEvent>,
 }
 
 impl Default for StreamManager {
@@ -67,15 +69,21 @@ impl Default for StreamManager {
 impl StreamManager {
     pub fn new() -> Self {
         let (event_tx, _) = broadcast::channel(256);
+        let (platform_event_tx, _) = broadcast::channel(256);
         Self {
             streams: Arc::new(RwLock::new(Vec::new())),
             platforms: Arc::new(RwLock::new(Vec::new())),
             event_tx,
+            platform_event_tx,
         }
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<StreamEvent> {
         self.event_tx.subscribe()
+    }
+
+    pub fn subscribe_platform_events(&self) -> broadcast::Receiver<PlatformEvent> {
+        self.platform_event_tx.subscribe()
     }
 
     pub async fn add_stream(&self, name: String, input_url: String) -> String {
@@ -141,22 +149,38 @@ impl StreamManager {
 
     pub async fn add_platform(&self, name: String, url: String, key: String) -> String {
         let id = Uuid::new_v4().to_string();
+        let platform_id = platform_id_from(&url, &key);
         let platform = Platform {
             id: id.clone(),
             name,
-            url,
-            key,
+            url: url.clone(),
+            key: key.clone(),
             enabled: true,
         };
         self.platforms.write().await.push(platform);
+        let _ = self.platform_event_tx.send(PlatformEvent::Added {
+            platform_id,
+            url,
+            key,
+        });
         id
     }
 
     pub async fn remove_platform(&self, id: &str) -> bool {
         let mut platforms = self.platforms.write().await;
+        let platform = platforms.iter().find(|p| p.id == id);
+        let platform_id = platform.map(|p| platform_id_from(&p.url, &p.key));
         let len_before = platforms.len();
         platforms.retain(|p| p.id != id);
-        platforms.len() < len_before
+        let removed = platforms.len() < len_before;
+        if removed {
+            if let Some(pid) = platform_id {
+                let _ = self.platform_event_tx.send(PlatformEvent::Removed {
+                    platform_id: pid,
+                });
+            }
+        }
+        removed
     }
 
     pub async fn get_platforms(&self) -> Vec<Platform> {
@@ -167,6 +191,13 @@ impl StreamManager {
         let mut platforms = self.platforms.write().await;
         if let Some(platform) = platforms.iter_mut().find(|p| p.id == id) {
             platform.enabled = enabled;
+            let pid = platform_id_from(&platform.url, &platform.key);
+            let _ = self.platform_event_tx.send(PlatformEvent::Toggled {
+                platform_id: pid,
+                url: platform.url.clone(),
+                key: platform.key.clone(),
+                enabled,
+            });
         }
     }
 
@@ -190,6 +221,13 @@ impl StreamManager {
                 platform.key = k;
             }
             if let Some(e) = enabled {
+                let pid = platform_id_from(&platform.url, &platform.key);
+                let _ = self.platform_event_tx.send(PlatformEvent::Toggled {
+                    platform_id: pid,
+                    url: platform.url.clone(),
+                    key: platform.key.clone(),
+                    enabled: e,
+                });
                 platform.enabled = e;
             }
             true

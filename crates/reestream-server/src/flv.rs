@@ -40,6 +40,12 @@ impl FlvState {
     pub async fn get_recent(&self) -> Vec<Bytes> {
         self.segments.read().await.clone()
     }
+
+    pub async fn subscribe_with_recent(&self) -> (Vec<Bytes>, broadcast::Receiver<Bytes>) {
+        let recent = self.segments.read().await.clone();
+        let rx = self.tx.subscribe();
+        (recent, rx)
+    }
 }
 
 pub fn build_flv_header() -> Bytes {
@@ -77,10 +83,15 @@ pub fn build_flv_tag(tag_type: u8, timestamp: u32, data: &[u8]) -> Bytes {
 
 pub fn flv_stream_response(state: FlvState) -> Response {
     let header = build_flv_header();
-    let mut rx = state.subscribe();
 
     let stream = async_stream::stream! {
         yield Ok::<_, std::convert::Infallible>(header);
+
+        let (recent, mut rx) = state.subscribe_with_recent().await;
+        for segment in recent {
+            yield Ok(segment);
+        }
+
         loop {
             match rx.recv().await {
                 Ok(chunk) => yield Ok(chunk),
