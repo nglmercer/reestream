@@ -683,6 +683,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/dashboard", get(dashboard::serve_index))
         .route("/assets/{*path}", get(dashboard::serve_assets))
         .route("/favicon.svg", get(dashboard::serve_favicon))
+        .route("/{path}", get(dashboard::serve_static))
         .route("/ws/streams", get(ws_streams))
         .route("/api/status", get(status))
         .route("/api/streams", get(list_streams).post(add_stream))

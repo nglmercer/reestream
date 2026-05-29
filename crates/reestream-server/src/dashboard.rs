@@ -32,6 +32,17 @@ pub async fn serve_assets(Path(path): Path<String>) -> impl IntoResponse {
     }
 }
 
+pub async fn serve_static(Path(path): Path<String>) -> impl IntoResponse {
+    match DashboardAssets::get(&path) {
+        Some(content) => {
+            let mime = mime_guess(&path);
+            let body = content.data.to_vec();
+            (StatusCode::OK, [("content-type", mime)], body).into_response()
+        }
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
 pub async fn serve_favicon() -> impl IntoResponse {
     match DashboardAssets::get("favicon.svg") {
         Some(content) => {
