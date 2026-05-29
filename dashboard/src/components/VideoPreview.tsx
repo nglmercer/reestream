@@ -1,26 +1,29 @@
-import { useState } from 'preact/hooks';
-import { useVideoPlayer } from '../hooks/useVideoPlayer';
+import { useState } from "preact/hooks";
+import { useVideoPlayer } from "../hooks/useVideoPlayer";
+import { useLocale } from "../hooks/useLocale";
 
 interface Props {
   streams: Array<{ id: string; name: string; status: string }>;
 }
 
-type StreamSource = 'flv' | 'hls';
+type StreamSource = "flv" | "hls";
 
 function Player({ url }: { url: string }) {
-  const { videoRef, playing, error, latency, playerType, toggle } = useVideoPlayer({
-    url,
-    autoplay: true,
-    muted: true,
-    lowLatency: true,
-  });
+  const { t } = useLocale();
+  const { videoRef, playing, error, latency, playerType, toggle } =
+    useVideoPlayer({
+      url,
+      autoplay: true,
+      muted: true,
+      lowLatency: true,
+    });
 
   return (
     <div class="relative">
       <video
         ref={videoRef}
         class="w-full rounded-lg bg-black"
-        style={{ maxHeight: '400px' }}
+        style={{ maxHeight: "400px" }}
         muted
         playsinline
         onClick={toggle}
@@ -34,7 +37,11 @@ function Player({ url }: { url: string }) {
               class="w-8 h-8 flex items-center justify-center rounded-full bg-white/20 hover:bg-white/30 transition-colors"
             >
               {playing ? (
-                <svg class="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 20 20">
+                <svg
+                  class="w-4 h-4 text-white"
+                  fill="currentColor"
+                  viewBox="0 0 20 20"
+                >
                   <path
                     fill-rule="evenodd"
                     d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z"
@@ -42,7 +49,11 @@ function Player({ url }: { url: string }) {
                   />
                 </svg>
               ) : (
-                <svg class="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 20 20">
+                <svg
+                  class="w-4 h-4 text-white"
+                  fill="currentColor"
+                  viewBox="0 0 20 20"
+                >
                   <path
                     fill-rule="evenodd"
                     d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z"
@@ -52,19 +63,23 @@ function Player({ url }: { url: string }) {
               )}
             </button>
             <span class="text-white text-xs font-mono">
-              {playing ? 'LIVE' : 'PAUSED'}
+              {playing ? t("preview.live") : t("preview.paused")}
             </span>
           </div>
           <div class="flex items-center gap-3">
             <span class="text-xs text-slate-300">
-              {playerType === 'flv' ? 'FLV' : 'HLS'}
+              {playerType === "flv" ? "FLV" : "HLS"}
             </span>
             <span
               class={`text-xs font-mono ${
-                latency < 1 ? 'text-success' : latency < 3 ? 'text-warning' : 'text-danger'
+                latency < 1
+                  ? "text-success"
+                  : latency < 3
+                    ? "text-warning"
+                    : "text-danger"
               }`}
             >
-              {latency.toFixed(1)}s lag
+              {t("preview.lag", { time: latency.toFixed(1) })}
             </span>
           </div>
         </div>
@@ -95,57 +110,66 @@ function Player({ url }: { url: string }) {
 }
 
 export function VideoPreview({ streams }: Props) {
-  const [source, setSource] = useState<StreamSource>('flv');
-  const [selectedStream, setSelectedStream] = useState<string>('');
+  const { t } = useLocale();
+  const [source, setSource] = useState<StreamSource>("flv");
+  const [selectedStream, setSelectedStream] = useState<string>("");
 
   const liveStream = streams.find(
-    (s) => s.status === 'Live' || (typeof s.status === 'object' && 'Live' in s.status),
+    (s) =>
+      s.status === "Live" ||
+      (typeof s.status === "object" && "Live" in s.status!),
   );
 
-  const streamToWatch = selectedStream || liveStream?.id || '';
+  const streamToWatch = selectedStream || liveStream?.id || "";
 
   const url = streamToWatch
-    ? source === 'flv'
-      ? '/stream.flv'
-      : '/stream.m3u8'
-    : '';
+    ? source === "flv"
+      ? "/stream.flv"
+      : "/stream.m3u8"
+    : "";
 
   const hasLive = !!liveStream;
 
   return (
     <div class="bg-surface-alt border border-border rounded-xl mb-6">
       <div class="flex items-center justify-between px-5 py-4 border-b border-border">
-        <h2 class="text-base font-semibold text-fg">Stream Preview</h2>
+        <h2 class="text-base font-semibold text-fg">{t("preview.title")}</h2>
         <div class="flex items-center gap-3">
           <div class="flex items-center gap-1 bg-surface-hover rounded-lg p-0.5">
             <button
-              onClick={() => setSource('flv')}
+              onClick={() => setSource("flv")}
               class={`px-2.5 py-1 text-xs rounded-md transition-colors ${
-                source === 'flv'
-                  ? 'bg-accent text-white'
-                  : 'text-fg-muted hover:text-fg'
+                source === "flv"
+                  ? "bg-accent text-white"
+                  : "text-fg-muted hover:text-fg"
               }`}
             >
-              FLV (low latency)
+              {t("preview.flv")}
             </button>
             <button
-              onClick={() => setSource('hls')}
+              onClick={() => setSource("hls")}
               class={`px-2.5 py-1 text-xs rounded-md transition-colors ${
-                source === 'hls'
-                  ? 'bg-accent text-white'
-                  : 'text-fg-muted hover:text-fg'
+                source === "hls"
+                  ? "bg-accent text-white"
+                  : "text-fg-muted hover:text-fg"
               }`}
             >
-              HLS
+              {t("preview.hls")}
             </button>
           </div>
           {streams.length > 1 && (
             <select
               value={selectedStream}
-              onChange={(e) => setSelectedStream((e.target as HTMLSelectElement).value)}
+              onChange={(e) =>
+                setSelectedStream((e.target as HTMLSelectElement).value)
+              }
               class="bg-surface-hover border border-border rounded px-2 py-1 text-xs text-fg-secondary"
             >
-              <option value="">Auto ({liveStream?.name ?? 'none'})</option>
+              <option value="">
+                {liveStream
+                  ? t("preview.auto", { name: liveStream.name })
+                  : t("preview.autoNone")}
+              </option>
               {streams.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}
@@ -173,9 +197,9 @@ export function VideoPreview({ streams }: Props) {
                   d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"
                 />
               </svg>
-              <p class="text-fg-muted text-sm">No live stream to preview</p>
+              <p class="text-fg-muted text-sm">{t("preview.noStream")}</p>
               <p class="text-fg-faint text-xs mt-1">
-                Start a stream to see the preview here
+                {t("preview.noStreamHint")}
               </p>
             </div>
           </div>
