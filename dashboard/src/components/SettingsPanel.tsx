@@ -1,22 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
+import type { ServerInfo } from '../api';
 import { useLocale } from '../hooks/useLocale';
-
-interface ServerInfo {
-  rtmp_url: string;
-  rtmps_url: string | null;
-  srt_url: string | null;
-  http_url: string;
-  hls_url: string;
-  flv_url: string;
-  dashboard_url: string;
-  api_url: string;
-  metrics_url: string;
-  stream_key_masked: string;
-  rtmp_port: number;
-  http_port: number;
-  srt_port: number;
-  hostname: string;
-}
 
 interface Props {
   onClose: () => void;

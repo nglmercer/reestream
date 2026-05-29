@@ -9,4 +9,9 @@ export type {
   AddPlatformRequest,
   UpdatePlatformRequest,
   ConfigResponse,
+  Orientation,
+  Recording,
+  ServerInfo,
+  SetupStatus,
 } from './types';
+export { isStreamStatusError, streamStatusLabel } from './types';

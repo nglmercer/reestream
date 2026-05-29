@@ -1,18 +1,12 @@
 import { useState, useCallback, useEffect } from 'preact/hooks';
+import type { Orientation, SetupStatus } from '../api';
 import { useLocale } from '../hooks/useLocale';
 
 interface SetupPlatform {
   name: string;
   url: string;
   key: string;
-  orientation: 'horizontal' | 'vertical';
-}
-
-interface SetupStatus {
-  first_run: boolean;
-  config_exists: boolean;
-  has_stream_key: boolean;
-  platform_count: number;
+  orientation: Orientation;
 }
 
 type Step = 'welcome' | 'server' | 'platforms' | 'confirm' | 'done';

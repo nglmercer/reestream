@@ -168,7 +168,7 @@ export function App() {
   const streamNames = (streams.data ?? []).map((s) => ({
     id: s.id,
     name: s.name,
-    status: typeof s.status === 'string' ? s.status : Object.keys(s.status)[0],
+    status: s.status,
   }));
 
   return (

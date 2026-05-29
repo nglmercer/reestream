@@ -1,9 +1,10 @@
 import { useState } from "preact/hooks";
 import { useVideoPlayer } from "../hooks/useVideoPlayer";
 import { useLocale } from "../hooks/useLocale";
+import type { StreamStatus } from "../api";
 
 interface Props {
-  streams: Array<{ id: string; name: string; status: string }>;
+  streams: Array<{ id: string; name: string; status: StreamStatus }>;
 }
 
 type StreamSource = "flv" | "hls";
@@ -29,7 +30,7 @@ function Player({ url }: { url: string }) {
         onClick={toggle}
       />
 
-      <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-3 rounded-b-lg">
+      <div class="absolute bottom-0 left-0 right-0 bg-linear-to-t from-black/80 to-transparent p-3 rounded-b-lg">
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-3">
             <button
@@ -114,11 +115,7 @@ export function VideoPreview({ streams }: Props) {
   const [source, setSource] = useState<StreamSource>("flv");
   const [selectedStream, setSelectedStream] = useState<string>("");
 
-  const liveStream = streams.find(
-    (s) =>
-      s.status === "Live" ||
-      (typeof s.status === "object" && "Live" in s.status),
-  );
+  const liveStream = streams.find((s) => s.status === "Live");
 
   const streamToWatch = selectedStream || liveStream?.id || "";
 

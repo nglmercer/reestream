@@ -12,7 +12,7 @@ interface Props {
   onClear: () => void;
 }
 
-const levelColor: Record<string, string> = {
+const levelColor: Record<LogEntry['level'], string> = {
   info: 'text-accent',
   warn: 'text-warning',
   error: 'text-danger',

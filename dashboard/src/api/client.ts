@@ -7,6 +7,7 @@ import type {
   AddPlatformRequest,
   UpdatePlatformRequest,
   ConfigResponse,
+  Recording,
 } from './types';
 
 const BASE = '';
@@ -67,7 +68,7 @@ export const api = {
   reloadConfig: () =>
     request<string>('/api/config/reload', { method: 'POST' }),
 
-  getRecordings: () => request<unknown[]>('/api/recordings'),
+  getRecordings: () => request<Recording[]>('/api/recordings'),
 
   startRecording: (streamId: string, inputUrl: string) =>
     request<string>('/api/recordings/start', {

@@ -1,16 +1,7 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
 import { api } from '../api';
+import type { Recording } from '../api';
 import { useLocale } from '../hooks/useLocale';
-
-interface Recording {
-  id: string;
-  stream_id: string;
-  filename: string;
-  format: string;
-  started_at: number;
-  size_bytes: number;
-  status: string;
-}
 
 interface Props {
   addLog: (msg: string, level?: 'info' | 'warn' | 'error') => void;
@@ -25,7 +16,7 @@ export function RecordingControls({ addLog }: Props) {
   const refresh = useCallback(async () => {
     try {
       const res = await api.getRecordings();
-      if (res.success && res.data) setRecordings(res.data as Recording[]);
+      if (res.success && res.data) setRecordings(res.data);
     } catch {
       // ignore
     } finally {

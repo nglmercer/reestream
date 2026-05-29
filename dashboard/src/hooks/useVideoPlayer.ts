@@ -4,6 +4,36 @@ import { useLocale } from './useLocale';
 
 type PlayerType = 'flv' | 'hls' | 'native';
 
+interface FlvPlayer {
+  attachMediaElement(el: HTMLMediaElement): void;
+  load(): void;
+  unload(): void;
+  detachMediaElement(): void;
+  destroy(): void;
+}
+
+interface FlvModule {
+  isSupported(): boolean;
+  createPlayer(
+    mediaDataSource: { type: string; isLive: boolean; url: string },
+    config?: Record<string, unknown>,
+  ): FlvPlayer;
+}
+
+interface HlsPlayer {
+  loadSource(url: string): void;
+  attachMedia(el: HTMLMediaElement): void;
+  destroy(): void;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  on(event: string, callback: (...args: any[]) => void): void;
+}
+
+interface HlsModule {
+  isSupported(): boolean;
+  Events: { MANIFEST_PARSED: string; ERROR: string };
+  new (config?: Record<string, unknown>): HlsPlayer;
+}
+
 interface UsePlayerOptions {
   url: string;
   autoplay?: boolean;
@@ -28,9 +58,9 @@ export function useVideoPlayer(opts: UsePlayerOptions): UsePlayerReturn {
   const [error, setError] = useState<string | null>(null);
   const [latency, setLatency] = useState(0);
   const [playerType, setPlayerType] = useState<PlayerType>('native');
-  const flvPlayerRef = useRef<any>(null);
+  const flvPlayerRef = useRef<FlvPlayer | null>(null);
   const { t } = useLocale();
-  const hlsPlayerRef = useRef<any>(null);
+  const hlsPlayerRef = useRef<HlsPlayer | null>(null);
   const initIdRef = useRef(0);
 
   useEffect(() => {
@@ -71,13 +101,20 @@ export function useVideoPlayer(opts: UsePlayerOptions): UsePlayerReturn {
       }
     }
 
-    function resetVideo() {
-      el.pause();
-      el.removeAttribute('src');
-      while (el.firstChild) {
-        el.removeChild(el.firstChild);
-      }
-      el.load();
+    function resetVideo(): Promise<void> {
+      return new Promise((resolve) => {
+        el.pause();
+        el.removeAttribute('src');
+        while (el.firstChild) {
+          el.removeChild(el.firstChild);
+        }
+        const onEmptied = () => {
+          el.removeEventListener('emptied', onEmptied);
+          resolve();
+        };
+        el.addEventListener('emptied', onEmptied);
+        el.load();
+      });
     }
 
     async function initFlv() {
@@ -85,7 +122,7 @@ export function useVideoPlayer(opts: UsePlayerOptions): UsePlayerReturn {
         const flvjs = await import('flv.js');
         if (currentInitId !== initIdRef.current) return;
 
-        const flvModule = flvjs.default || flvjs;
+        const flvModule = (flvjs.default || flvjs) as FlvModule;
         if (!flvModule.isSupported()) {
           setError(t('error.flvNotSupported'));
           return;
@@ -142,7 +179,7 @@ export function useVideoPlayer(opts: UsePlayerOptions): UsePlayerReturn {
 
     async function initHls() {
       try {
-        const Hls = (await import('hls.js')).default;
+        const Hls = (await import('hls.js')).default as HlsModule;
         if (currentInitId !== initIdRef.current) return;
 
         if (Hls.isSupported()) {
@@ -171,7 +208,7 @@ export function useVideoPlayer(opts: UsePlayerOptions): UsePlayerReturn {
             }
           });
 
-          hls.on(Hls.Events.ERROR, (_event, data) => {
+          hls.on(Hls.Events.ERROR, (_event: unknown, data: { fatal: boolean; type: string; details: string }) => {
             if (data.fatal && currentInitId === initIdRef.current) {
               setError(t('error.hlsError', { type: data.type, details: data.details }));
             }
@@ -196,26 +233,30 @@ export function useVideoPlayer(opts: UsePlayerOptions): UsePlayerReturn {
       }
     }
 
-    destroyFlv();
-    destroyHls();
-    resetVideo();
+    (async () => {
+      destroyFlv();
+      destroyHls();
+      await resetVideo();
 
-    requestAnimationFrame(() => {
       if (currentInitId !== initIdRef.current) return;
 
-      if (isFlv) {
-        initFlv();
-      } else if (isHls) {
-        initHls();
-      } else {
-        el.src = opts.url;
-        el.load();
-        if (opts.autoplay !== false) {
-          el.play().catch(() => {});
+      requestAnimationFrame(() => {
+        if (currentInitId !== initIdRef.current) return;
+
+        if (isFlv) {
+          initFlv();
+        } else if (isHls) {
+          initHls();
+        } else {
+          el.src = opts.url;
+          el.load();
+          if (opts.autoplay !== false) {
+            el.play().catch(() => {});
+          }
+          setPlayerType('native');
         }
-        setPlayerType('native');
-      }
-    });
+      });
+    })();
 
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
@@ -241,9 +282,12 @@ export function useVideoPlayer(opts: UsePlayerOptions): UsePlayerReturn {
       destroyHls();
       el.pause();
       el.removeAttribute('src');
+      while (el.firstChild) {
+        el.removeChild(el.firstChild);
+      }
       el.load();
     };
-  }, [opts.url, opts.autoplay]);
+  }, [opts.url, opts.autoplay, t]);
 
   const play = useCallback(() => {
     videoRef.current?.play().catch(() => {});

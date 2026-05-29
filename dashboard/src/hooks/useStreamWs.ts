@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
+import type { StreamInfo } from '../api';
 
 interface StreamEvent {
   type: 'init' | 'event';
-  streams?: unknown[];
+  streams?: StreamInfo[];
   event?: {
     Started?: { id: string; name: string; input_url: string };
     Stopped?: { id: string };
@@ -12,7 +13,7 @@ interface StreamEvent {
 }
 
 interface UseStreamWsOptions {
-  onInit?: (streams: unknown[]) => void;
+  onInit?: (streams: StreamInfo[]) => void;
   onStarted?: (id: string, name: string, input_url: string) => void;
   onStopped?: (id: string) => void;
   onUpdated?: (id: string, viewers: number, bitrate: number) => void;
