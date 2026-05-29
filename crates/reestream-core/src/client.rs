@@ -73,7 +73,13 @@ pub async fn handle_publisher(
     let (mut server_session, leftover) = handshake_and_create_server_session(&mut inbound).await?;
     let (reconnect_tx, mut reconnect_rx) = mpsc::channel::<(usize, PushClient)>(10);
 
-    let pls: Vec<Platform> = platforms.read().await.iter().filter(|p| p.enabled).cloned().collect();
+    let pls: Vec<Platform> = platforms
+        .read()
+        .await
+        .iter()
+        .filter(|p| p.enabled)
+        .cloned()
+        .collect();
     let mut push_clients: Vec<PushClient> = Vec::new();
 
     if !leftover.is_empty() {

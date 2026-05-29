@@ -68,7 +68,7 @@ impl HlsSegmenter {
 
         for segment in segments {
             playlist.push_str(&format!("#EXTINF:{:.3},\n", segment.duration));
-            playlist.push_str(&format!("{}\n", segment.filename));
+            playlist.push_str(&format!("/hls/{}\n", segment.filename));
         }
 
         playlist
@@ -133,8 +133,8 @@ mod tests {
         assert!(playlist.contains("#EXTM3U"));
         assert!(playlist.contains("#EXT-X-TARGETDURATION:2"));
         assert!(playlist.contains("#EXTINF:2.000,"));
-        assert!(playlist.contains("seg0.ts"));
-        assert!(playlist.contains("seg1.ts"));
+        assert!(playlist.contains("/hls/seg0.ts"));
+        assert!(playlist.contains("/hls/seg1.ts"));
         assert!(!playlist.contains("#EXT-X-ENDLIST"));
     }
 
@@ -154,6 +154,7 @@ mod tests {
         let playlist = segmenter.generate_playlist(&segments, false);
         assert!(playlist.contains("#EXT-X-ENDLIST"));
         assert!(playlist.contains("#EXTINF:2.500,"));
+        assert!(playlist.contains("/hls/seg0.ts"));
     }
 
     #[tokio::test]

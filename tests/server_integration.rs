@@ -97,6 +97,7 @@ async fn test_platform_list_shared_across_connections() {
     use url::Url;
 
     let platform = Platform {
+        enabled: true,
         url: Url::parse("rtmp://127.0.0.1:1999/app").unwrap(),
         key: "test-key".to_string(),
         orientation: reestream::config::Orientation::Horizontal,
@@ -116,6 +117,7 @@ async fn test_platform_list_shared_across_connections() {
     {
         let mut guard = platforms_clone.write().await;
         guard.push(Platform {
+            enabled: true,
             url: Url::parse("rtmp://127.0.0.1:2000/app").unwrap(),
             key: "key2".to_string(),
             orientation: reestream::config::Orientation::Vertical,

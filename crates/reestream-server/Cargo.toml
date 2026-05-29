@@ -12,6 +12,7 @@ hls = ["dep:tower-http"]
 api = []
 
 [dependencies]
+async-stream = "0.3"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["ws"] }
 bytes = "1.10"

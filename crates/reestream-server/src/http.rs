@@ -402,17 +402,20 @@ async fn toggle_platform(
         state.stream_manager.toggle_platform(&id, new_enabled).await;
 
         // Persist to config.toml
-        if let Ok(mut config) = reestream_core::setup::read_config(&state.config_path) {
-            if let Some(ref mut cfg_platforms) = config.platform {
-                for cp in cfg_platforms.iter_mut() {
-                    if cp.url.as_str() == p.url.as_str() && cp.key == p.key {
-                        cp.enabled = new_enabled;
-                        break;
-                    }
+        if let Ok(mut config) = reestream_core::setup::read_config(&state.config_path)
+            && let Some(ref mut cfg_platforms) = config.platform
+        {
+            for cp in cfg_platforms.iter_mut() {
+                if cp.url.as_str() == p.url.as_str() && cp.key == p.key {
+                    cp.enabled = new_enabled;
+                    break;
                 }
-                let _ = reestream_core::setup::save_config(&state.config_path, &config);
-                info!("Platform {} toggled to {} and saved to config", id, new_enabled);
             }
+            let _ = reestream_core::setup::save_config(&state.config_path, &config);
+            info!(
+                "Platform {} toggled to {} and saved to config",
+                id, new_enabled
+            );
         }
 
         let state_label = if new_enabled { "enabled" } else { "disabled" };
@@ -554,7 +557,7 @@ async fn hls_segment(
 }
 
 async fn flv_stream(State(state): State<AppState>) -> impl IntoResponse {
-    flv::flv_stream_impl(state.flv_state).await
+    flv::flv_stream_response(state.flv_state)
 }
 
 async fn ws_streams(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {

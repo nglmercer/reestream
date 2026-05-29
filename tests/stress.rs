@@ -103,6 +103,7 @@ async fn test_stress_shared_platform_list_concurrent_access() {
     use url::Url;
 
     let platform = Platform {
+        enabled: true,
         url: Url::parse("rtmp://127.0.0.1:1935/app").unwrap(),
         key: "key".to_string(),
         orientation: Orientation::Horizontal,
@@ -123,6 +124,7 @@ async fn test_stress_shared_platform_list_concurrent_access() {
                 } else {
                     let mut guard = platforms.write().await;
                     guard.push(Platform {
+                        enabled: true,
                         url: Url::parse("rtmp://127.0.0.1/app").unwrap(),
                         key: format!("key-{}", i),
                         orientation: Orientation::Horizontal,

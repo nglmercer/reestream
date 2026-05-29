@@ -1,23 +1,31 @@
-use axum::{http::StatusCode, response::IntoResponse};
+use axum::{
+    body::Body,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
 use bytes::{BufMut, Bytes, BytesMut};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, broadcast};
 
 #[derive(Clone)]
 pub struct FlvState {
     pub segments: Arc<RwLock<Vec<Bytes>>>,
+    pub tx: broadcast::Sender<Bytes>,
 }
 
 impl Default for FlvState {
     fn default() -> Self {
+        let (tx, _) = broadcast::channel(1024);
         Self {
             segments: Arc::new(RwLock::new(Vec::new())),
+            tx,
         }
     }
 }
 
 impl FlvState {
     pub async fn push_data(&self, data: Bytes) {
+        let _ = self.tx.send(data.clone());
         let mut segments = self.segments.write().await;
         segments.push(data);
         if segments.len() > 1000 {
@@ -25,7 +33,11 @@ impl FlvState {
         }
     }
 
-    pub async fn get_data(&self) -> Vec<Bytes> {
+    pub fn subscribe(&self) -> broadcast::Receiver<Bytes> {
+        self.tx.subscribe()
+    }
+
+    pub async fn get_recent(&self) -> Vec<Bytes> {
         self.segments.read().await.clone()
     }
 }
@@ -63,22 +75,28 @@ pub fn build_flv_tag(tag_type: u8, timestamp: u32, data: &[u8]) -> Bytes {
     buf.freeze()
 }
 
-pub async fn flv_stream_impl(state: FlvState) -> impl IntoResponse {
-    let data = state.get_data().await;
-    let mut response = Vec::new();
-    response.extend_from_slice(&build_flv_header());
-    for segment in &data {
-        response.extend_from_slice(segment);
-    }
+pub fn flv_stream_response(state: FlvState) -> Response {
+    let header = build_flv_header();
+    let mut rx = state.subscribe();
 
-    (
-        StatusCode::OK,
-        [
-            ("content-type", "video/x-flv"),
-            ("cache-control", "no-cache"),
-        ],
-        response,
-    )
+    let stream = async_stream::stream! {
+        yield Ok::<_, std::convert::Infallible>(header);
+        loop {
+            match rx.recv().await {
+                Ok(chunk) => yield Ok(chunk),
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(_) => break,
+            }
+        }
+    };
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "video/x-flv")
+        .header("cache-control", "no-cache")
+        .header("transfer-encoding", "chunked")
+        .body(Body::from_stream(stream))
+        .unwrap()
 }
 
 pub async fn flv_health() -> impl IntoResponse {
@@ -117,7 +135,7 @@ mod tests {
         let state = FlvState::default();
         state.push_data(Bytes::from_static(&[0x01, 0x02])).await;
         state.push_data(Bytes::from_static(&[0x03, 0x04])).await;
-        let data = state.get_data().await;
+        let data = state.get_recent().await;
         assert_eq!(data.len(), 2);
     }
 
@@ -127,7 +145,7 @@ mod tests {
         for i in 0..1100 {
             state.push_data(Bytes::from(vec![i as u8])).await;
         }
-        let data = state.get_data().await;
+        let data = state.get_recent().await;
         assert_eq!(data.len(), 600);
     }
 
