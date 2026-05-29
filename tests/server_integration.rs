@@ -67,6 +67,7 @@ async fn test_graceful_shutdown_with_ctrl_c_simulation() {
                         let _ = socket.set_nodelay(true);
                         let platforms = platforms.clone();
                         let stream_key = "test-key".to_string();
+                        let (_, pev) = tokio::sync::broadcast::channel(1);
                         tokio::spawn(async move {
                             let _ = reestream::client::handle_publisher(
                                 socket,
@@ -74,6 +75,7 @@ async fn test_graceful_shutdown_with_ctrl_c_simulation() {
                                 stream_key,
                                 None,
                                 None,
+                                pev,
                             )
                             .await;
                         });

@@ -7,6 +7,14 @@ export default defineConfig({
   build: {
     outDir: '../crates/reestream-server/static',
     emptyOutDir: true,
+    assetsDir: 'assets',
+    rollupOptions: {
+      output: {
+        assetFileNames: '[name].[ext]',
+        chunkFileNames: '[name].js',
+        entryFileNames: '[name].js'
+      }
+    }
   },
   optimizeDeps: {
     include: ['flv.js'],
