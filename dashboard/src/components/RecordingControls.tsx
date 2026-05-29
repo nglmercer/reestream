@@ -117,7 +117,7 @@ export function RecordingControls({ addLog }: Props) {
             class="px-3 py-1.5 text-sm rounded-lg bg-danger hover:opacity-90 disabled:bg-surface-active disabled:text-fg-faint text-white transition-colors flex items-center gap-1.5"
           >
             <span class="w-2 h-2 rounded-full bg-white animate-pulse" style={{ display: recording ? 'none' : 'block' }} />
-            {recording ? 'Starting…' : 'Record'}
+            {recording ? t('recording.starting') : t('recording.record')}
           </button>
         </div>
       </div>
@@ -125,7 +125,7 @@ export function RecordingControls({ addLog }: Props) {
       <div class="p-4">
         {activeRecordings.length > 0 && (
           <div class="mb-4">
-            <div class="text-xs text-fg-faint uppercase tracking-wider mb-2">Active</div>
+            <div class="text-xs text-fg-faint uppercase tracking-wider mb-2">{t('recording.active')}</div>
             {activeRecordings.map((r) => (
               <div
                 key={r.id}
@@ -145,7 +145,7 @@ export function RecordingControls({ addLog }: Props) {
                   onClick={() => handleStop(r.id)}
                   class="px-3 py-1 text-xs rounded bg-danger hover:opacity-90 text-white transition-colors"
                 >
-                  Stop
+                  {t('recording.stop')}
                 </button>
               </div>
             ))}
@@ -154,7 +154,7 @@ export function RecordingControls({ addLog }: Props) {
 
         {pastRecordings.length > 0 && (
           <div>
-            <div class="text-xs text-fg-faint uppercase tracking-wider mb-2">History</div>
+            <div class="text-xs text-fg-faint uppercase tracking-wider mb-2">{t('recording.history')}</div>
             <div class="space-y-1 max-h-48 overflow-y-auto">
               {pastRecordings.map((r) => (
                 <div
@@ -171,7 +171,7 @@ export function RecordingControls({ addLog }: Props) {
                     onClick={() => handleDelete(r.id)}
                     class="px-2 py-1 text-xs rounded text-danger hover:bg-danger-bg transition-colors"
                   >
-                    Delete
+                    {t('recording.delete')}
                   </button>
                 </div>
               ))}
@@ -181,12 +181,12 @@ export function RecordingControls({ addLog }: Props) {
 
         {!loading && recordings.length === 0 && (
           <div class="text-center py-6 text-fg-faint text-sm">
-            No recordings. Click "Record" to start capturing the stream.
+            {t('recording.empty')}
           </div>
         )}
 
         {loading && (
-          <div class="text-center py-6 text-fg-faint text-sm animate-pulse">Loading…</div>
+          <div class="text-center py-6 text-fg-faint text-sm animate-pulse">{t('recording.loading')}</div>
         )}
       </div>
     </div>

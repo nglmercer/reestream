@@ -178,14 +178,14 @@ export function SettingsPanel({ onClose, addLog }: Props) {
                 {resetting ? t('settings.resetting') : t('settings.resetKey')}
               </button>
               <p class="text-xs text-fg-faint mt-2">
-                Resetting generates a new key. Update your streaming software immediately.
+                {t('settings.resetHelp')}
               </p>
             </div>
           </div>
 
           <div>
             <h3 class="text-sm font-semibold text-fg-muted uppercase tracking-wider mb-3">
-              Server Endpoints
+              {t('settings.endpoints')}
             </h3>
             <div class="space-y-2">
               {endpoints.filter((ep) => ep.value != null).map((ep) => (
@@ -204,7 +204,7 @@ export function SettingsPanel({ onClose, addLog }: Props) {
                     onClick={() => copyToClipboard(ep.value!, ep.label)}
                     class="shrink-0 px-2 py-1 text-xs rounded bg-surface-hover hover:bg-surface-active border border-border transition-colors text-fg-secondary"
                   >
-                    {copied === ep.label ? 'Copied!' : 'Copy'}
+                    {copied === ep.label ? t('settings.copied') : t('settings.copy')}
                   </button>
                 </div>
               ))}
@@ -213,12 +213,12 @@ export function SettingsPanel({ onClose, addLog }: Props) {
 
           <div>
             <h3 class="text-sm font-semibold text-fg-muted uppercase tracking-wider mb-3">
-              Quick Setup (OBS / Streamlabs)
+              {t('settings.obsSetup')}
             </h3>
             <div class="bg-surface-raised rounded-xl p-4 border border-border space-y-3">
               {[
-                'Open OBS → Settings → Stream',
-                'Service: Custom',
+                t('settings.obsStep1'),
+                t('settings.obsStep2Service') + t('settings.obsStep2Value'),
               ].map((text, i) => (
                 <div key={i} class="flex items-start gap-3">
                   <span class="shrink-0 w-6 h-6 rounded-full bg-accent text-white text-xs flex items-center justify-center font-bold">{i + 1}</span>
@@ -228,13 +228,13 @@ export function SettingsPanel({ onClose, addLog }: Props) {
               <div class="flex items-start gap-3">
                 <span class="shrink-0 w-6 h-6 rounded-full bg-accent text-white text-xs flex items-center justify-center font-bold">3</span>
                 <div class="text-sm text-fg">
-                  Server: <code class="text-accent bg-surface px-1.5 py-0.5 rounded text-xs">{info?.rtmp_url ?? 'rtmp://localhost:1935'}</code>
+                  {t('settings.obsStep3')}<code class="text-accent bg-surface px-1.5 py-0.5 rounded text-xs">{info?.rtmp_url ?? 'rtmp://localhost:1935'}</code>
                 </div>
               </div>
               <div class="flex items-start gap-3">
                 <span class="shrink-0 w-6 h-6 rounded-full bg-accent text-white text-xs flex items-center justify-center font-bold">4</span>
                 <div class="text-sm text-fg">
-                  Stream Key: <code class="text-accent bg-surface px-1.5 py-0.5 rounded text-xs">{showKey && streamKey ? streamKey : info?.stream_key_masked ?? '****'}</code>
+                  {t('settings.obsStep4')}<code class="text-accent bg-surface px-1.5 py-0.5 rounded text-xs">{showKey && streamKey ? streamKey : info?.stream_key_masked ?? '****'}</code>
                 </div>
               </div>
             </div>

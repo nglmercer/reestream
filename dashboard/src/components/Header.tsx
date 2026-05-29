@@ -1,5 +1,6 @@
 import { useTheme } from '../hooks/useTheme';
 import { useLocale } from '../hooks/useLocale';
+import type { Locale } from '../i18n';
 
 interface Props {
   version: string;
@@ -9,7 +10,7 @@ interface Props {
 
 export function Header({ version, onSettings, wsConnected }: Props) {
   const { theme, toggle } = useTheme();
-  const { t } = useLocale();
+  const { t, locale, set: setLocale, localeNames } = useLocale();
 
   return (
     <header class="bg-surface-alt border-b border-border px-6 py-4 flex items-center justify-between">
@@ -22,6 +23,16 @@ export function Header({ version, onSettings, wsConnected }: Props) {
           />
         )}
         <span class="text-sm text-fg-faint">{t('header.version', { version })}</span>
+        <select
+          value={locale}
+          onChange={(e) => setLocale((e.target as HTMLSelectElement).value as Locale)}
+          class="bg-surface-hover border border-border rounded px-1.5 py-1 text-xs text-fg-secondary cursor-pointer"
+          title={t('header.language')}
+        >
+          {Object.entries(localeNames).map(([code, name]) => (
+            <option key={code} value={code}>{name}</option>
+          ))}
+        </select>
         <button
           onClick={toggle}
           class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-surface-hover text-fg-muted hover:text-fg transition-colors"

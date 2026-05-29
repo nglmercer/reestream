@@ -28,6 +28,7 @@ export function useVideoPlayer(opts: UsePlayerOptions): UsePlayerReturn {
   const [latency, setLatency] = useState(0);
   const [playerType, setPlayerType] = useState<PlayerType>('native');
   const flvPlayerRef = useRef<any>(null);
+  const { t } = useLocale();
   const hlsPlayerRef = useRef<any>(null);
   const initIdRef = useRef(0);
 
@@ -85,7 +86,7 @@ export function useVideoPlayer(opts: UsePlayerOptions): UsePlayerReturn {
 
         const flvModule = flvjs.default || flvjs;
         if (!flvModule.isSupported()) {
-          setError('FLV.js not supported in this browser');
+          setError(t('error.flvNotSupported'));
           return;
         }
 
@@ -133,7 +134,7 @@ export function useVideoPlayer(opts: UsePlayerOptions): UsePlayerReturn {
         setPlayerType('flv');
       } catch (e) {
         if (currentInitId === initIdRef.current) {
-          setError(`FLV init failed: ${e}`);
+          setError(t('error.flvInitFailed', { error: String(e) }));
         }
       }
     }
@@ -171,7 +172,7 @@ export function useVideoPlayer(opts: UsePlayerOptions): UsePlayerReturn {
 
           hls.on(Hls.Events.ERROR, (_event, data) => {
             if (data.fatal && currentInitId === initIdRef.current) {
-              setError(`HLS error: ${data.type} - ${data.details}`);
+              setError(t('error.hlsError', { type: data.type, details: data.details }));
             }
           });
 
@@ -185,11 +186,11 @@ export function useVideoPlayer(opts: UsePlayerOptions): UsePlayerReturn {
           }
           setPlayerType('native');
         } else {
-          setError('HLS not supported in this browser');
+          setError(t('error.hlsNotSupported'));
         }
       } catch (e) {
         if (currentInitId === initIdRef.current) {
-          setError(`HLS init failed: ${e}`);
+          setError(t('error.hlsInitFailed', { error: String(e) }));
         }
       }
     }
@@ -217,7 +218,7 @@ export function useVideoPlayer(opts: UsePlayerOptions): UsePlayerReturn {
 
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
-    const onError = () => setError(`Video error: ${el.error?.message ?? 'unknown'}`);
+    const onError = () => setError(t('error.videoError', { message: el.error?.message ?? t('error.unknown') }));
 
     el.addEventListener('play', onPlay);
     el.addEventListener('pause', onPause);

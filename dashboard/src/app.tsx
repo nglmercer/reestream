@@ -2,6 +2,7 @@ import { useCallback, useState, useEffect } from 'preact/hooks';
 import { api } from './api';
 import type { ServerStatus, StreamInfo, Platform } from './api';
 import { usePolling, useStreamWs } from './hooks';
+import { useLocale } from './hooks/useLocale';
 import { useLogger } from './components/LogViewer';
 import { Header } from './components/Header';
 import { StatsCards } from './components/StatsCards';
@@ -18,6 +19,7 @@ const PLATFORMS_POLL = 15_000;
 
 export function App() {
   const { logs, addLog, clearLogs } = useLogger();
+  const { t } = useLocale();
   const [needsSetup, setNeedsSetup] = useState<boolean | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [liveStreams, setLiveStreams] = useState<StreamInfo[]>([]);
@@ -41,7 +43,7 @@ export function App() {
       setWsConnected(true);
     },
     onStarted: (id, name, input_url) => {
-      addLog(`Stream started: ${name}`);
+      addLog(t('log.streamStarted', { name }));
       setLiveStreams((prev) => {
         if (prev.some((s) => s.id === id)) return prev;
         return [...prev, {
@@ -56,7 +58,7 @@ export function App() {
       });
     },
     onStopped: (id) => {
-      addLog('Stream ended');
+      addLog(t('log.streamEnded'));
       setLiveStreams((prev) => prev.filter((s) => s.id !== id));
     },
     onUpdated: (id, viewers, bitrate) => {
@@ -65,7 +67,7 @@ export function App() {
       );
     },
     onError: (id, message) => {
-      addLog(`Stream error: ${message}`, 'error');
+      addLog(t('log.streamError', { message }), 'error');
       setLiveStreams((prev) =>
         prev.map((s) => (s.id === id ? { ...s, status: { Error: message } } : s)),
       );
@@ -74,19 +76,19 @@ export function App() {
 
   const fetchStreams = useCallback(async (): Promise<StreamInfo[]> => {
     const res = await api.getStreams();
-    if (!res.success || !res.data) throw new Error(res.error ?? 'Failed to fetch streams');
+    if (!res.success || !res.data) throw new Error(res.error ?? t('error.fetchStreams'));
     return res.data;
   }, []);
 
   const fetchStatus = useCallback(async (): Promise<ServerStatus> => {
     const res = await api.getStatus();
-    if (!res.success || !res.data) throw new Error(res.error ?? 'Failed to fetch status');
+    if (!res.success || !res.data) throw new Error(res.error ?? t('error.fetchStatus'));
     return res.data;
   }, []);
 
   const fetchPlatforms = useCallback(async (): Promise<Platform[]> => {
     const res = await api.getPlatforms();
-    if (!res.success || !res.data) throw new Error(res.error ?? 'Failed to fetch platforms');
+    if (!res.success || !res.data) throw new Error(res.error ?? t('error.fetchPlatforms'));
     return res.data;
   }, []);
 
@@ -100,10 +102,10 @@ export function App() {
     async (id: string) => {
       const res = await api.togglePlatform(id);
       if (res.success) {
-        addLog('Platform toggled');
+        addLog(t('log.platformToggled'));
         platforms.refresh();
       } else {
-        addLog(`Toggle failed: ${res.error}`, 'error');
+        addLog(t('log.toggleFailed', { error: res.error }), 'error');
       }
     },
     [addLog, platforms],
@@ -113,10 +115,10 @@ export function App() {
     async (name: string, url: string, key: string) => {
       const res = await api.addPlatform({ name, url, key });
       if (res.success) {
-        addLog(`Platform "${name}" added`);
+        addLog(t('log.platformAdded', { name }));
         platforms.refresh();
       } else {
-        throw new Error(res.error ?? 'Failed to add platform');
+        throw new Error(res.error ?? t('log.addFailed'));
       }
     },
     [addLog, platforms],
@@ -126,10 +128,10 @@ export function App() {
     async (id: string) => {
       const res = await api.removePlatform(id);
       if (res.success) {
-        addLog('Platform removed');
+        addLog(t('log.platformRemoved'));
         platforms.refresh();
       } else {
-        addLog(`Remove failed: ${res.error}`, 'error');
+        addLog(t('log.removeFailed', { error: res.error }), 'error');
       }
     },
     [addLog, platforms],
@@ -139,17 +141,17 @@ export function App() {
     async (id: string, req: { name?: string; url?: string; key?: string; enabled?: boolean }) => {
       const res = await api.updatePlatform(id, req);
       if (res.success) {
-        addLog('Platform updated');
+        addLog(t('log.platformUpdated'));
         platforms.refresh();
       } else {
-        addLog(`Update failed: ${res.error}`, 'error');
+        addLog(t('log.updateFailed', { error: res.error }), 'error');
       }
     },
     [addLog, platforms],
   );
 
-  if (status.error) addLog(`Status error: ${status.error}`, 'error');
-  if (platforms.error) addLog(`Platforms error: ${platforms.error}`, 'error');
+  if (status.error) addLog(t('log.statusError', { error: status.error }), 'error');
+  if (platforms.error) addLog(t('log.platformsError', { error: platforms.error }), 'error');
 
   if (needsSetup === true) {
     return <SetupWizard />;
@@ -158,7 +160,7 @@ export function App() {
   if (needsSetup === null) {
     return (
       <div class="min-h-screen bg-surface flex items-center justify-center">
-        <div class="text-fg-muted animate-pulse">Loading…</div>
+        <div class="text-fg-muted animate-pulse">{t('common.loading')}</div>
       </div>
     );
   }
@@ -172,7 +174,7 @@ export function App() {
   return (
     <div class="min-h-screen bg-surface">
       <Header
-        version={status.data?.version ?? '…'}
+        version={status.data?.version ?? t('common.fallback')}
         onSettings={() => setShowSettings(true)}
         wsConnected={wsConnected}
       />
