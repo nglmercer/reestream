@@ -44,13 +44,13 @@ export function RecordingControls({ addLog }: Props) {
     try {
       const res = await api.startRecording('live', 'rtmp://0.0.0.0:1935/live');
       if (res.success) {
-        addLog(t('log.recordingStarted', { id: res.data }));
+        addLog(t('log.recordingStarted', { id: res.data ?? 'unknown' }));
         refresh();
       } else {
-        addLog(t('log.recordingFailed', { error: res.error }), 'error');
+        addLog(t('log.recordingFailed', { error: res.error ?? 'unknown' }), 'error');
       }
     } catch (e) {
-      addLog(t('log.recordingError', { error: e }), 'error');
+      addLog(t('log.recordingError', { error: String(e) }), 'error');
     } finally {
       setRecording(false);
     }
