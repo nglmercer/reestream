@@ -398,8 +398,25 @@ async fn toggle_platform(
 ) -> impl IntoResponse {
     let platforms = state.stream_manager.get_platforms().await;
     if let Some(p) = platforms.iter().find(|p| p.id == id) {
-        state.stream_manager.toggle_platform(&id, !p.enabled).await;
-        (StatusCode::OK, axum::Json(ApiResponse::ok("toggled"))).into_response()
+        let new_enabled = !p.enabled;
+        state.stream_manager.toggle_platform(&id, new_enabled).await;
+
+        // Persist to config.toml
+        if let Ok(mut config) = reestream_core::setup::read_config(&state.config_path) {
+            if let Some(ref mut cfg_platforms) = config.platform {
+                for cp in cfg_platforms.iter_mut() {
+                    if cp.url.as_str() == p.url.as_str() && cp.key == p.key {
+                        cp.enabled = new_enabled;
+                        break;
+                    }
+                }
+                let _ = reestream_core::setup::save_config(&state.config_path, &config);
+                info!("Platform {} toggled to {} and saved to config", id, new_enabled);
+            }
+        }
+
+        let state_label = if new_enabled { "enabled" } else { "disabled" };
+        (StatusCode::OK, axum::Json(ApiResponse::ok(state_label))).into_response()
     } else {
         (
             StatusCode::NOT_FOUND,

@@ -12,10 +12,17 @@ pub struct Config {
     pub platform: Option<Vec<Platform>>,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Platform {
     pub url: Url,
     pub key: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
     pub orientation: Orientation,
 }
 
@@ -68,6 +75,7 @@ impl ConfigBuilder {
         self.platforms.push(Platform {
             url,
             key: key.into(),
+            enabled: true,
             orientation,
         });
         self

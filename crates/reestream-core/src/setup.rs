@@ -320,6 +320,7 @@ pub fn add_platform_to_config(
     platforms.push(crate::config::Platform {
         url: parsed_url,
         key: key.to_string(),
+        enabled: true,
         orientation: orient,
     });
 
