@@ -114,11 +114,41 @@ fn bad_request(message: impl Into<String>) -> Response {
 }
 
 #[allow(clippy::result_large_err)]
-fn parse_url(value: &str, field: &str) -> Result<(), Response> {
-    let parsed =
-        url::Url::parse(value).map_err(|_| bad_request(format!("{field} must be a URL")))?;
-    if parsed.scheme().is_empty() || parsed.host_str().is_none() {
-        return Err(bad_request(format!("{field} must include a host")));
+fn parse_oauth_redirect_uri(value: &str, field: &str) -> Result<(), Response> {
+    if value.len() > 2048 {
+        return Err(bad_request(format!("{field} is too long")));
+    }
+    let parsed = url::Url::parse(value)
+        .map_err(|_| bad_request(format!("{field} must be a valid OAuth redirect URI")))?;
+    if parsed.fragment().is_some() || !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(bad_request(format!(
+            "{field} cannot contain fragments or embedded credentials"
+        )));
+    }
+    match parsed.scheme() {
+        "https" if parsed.host_str().is_some() => Ok(()),
+        "http"
+            if parsed.host_str().is_some_and(|host| {
+                matches!(host, "localhost" | "127.0.0.1" | "[::1]" | "::1")
+            }) =>
+        {
+            Ok(())
+        }
+        _ => Err(bad_request(format!(
+            "{field} must use HTTPS; HTTP is allowed only for localhost development"
+        ))),
+    }
+}
+
+#[allow(clippy::result_large_err)]
+fn validate_oauth_redirect_uri(platform: &str, value: &str, field: &str) -> Result<(), Response> {
+    parse_oauth_redirect_uri(value, field)?;
+    if let Some(expected) = oauth_setting(platform, "REDIRECT_URI")
+        && expected != value
+    {
+        return Err(bad_request(format!(
+            "{field} does not match the configured OAuth redirect URI"
+        )));
     }
     Ok(())
 }
@@ -1060,7 +1090,9 @@ async fn oauth_authorize(
             "OAuth authorize URL is invalid",
         );
     };
-    if let Err(response) = parse_url(&query.redirect_uri, "redirectUri") {
+    if let Err(response) =
+        validate_oauth_redirect_uri(&platform, &query.redirect_uri, "redirectUri")
+    {
         return response;
     }
     state
@@ -1138,6 +1170,9 @@ async fn oauth_token(
         let Some(redirect_uri) = request.redirect_uri.as_deref() else {
             return bad_request("redirectUri is required for OAuth code exchange");
         };
+        if let Err(response) = validate_oauth_redirect_uri(&platform, redirect_uri, "redirectUri") {
+            return response;
+        }
         if !state
             .restream
             .consume_oauth_state(
@@ -1163,7 +1198,8 @@ async fn oauth_token(
         form.push(("refresh_token".into(), refresh_token));
     }
     if let Some(redirect_uri) = request.redirect_uri {
-        if let Err(response) = parse_url(&redirect_uri, "redirectUri") {
+        if let Err(response) = validate_oauth_redirect_uri(&platform, &redirect_uri, "redirectUri")
+        {
             return response;
         }
         form.push(("redirect_uri".into(), redirect_uri));
@@ -1633,6 +1669,15 @@ async fn update_event(
 }
 
 async fn delete_event(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let Some(event) = state.restream.get_event(&id).await else {
+        return not_found("event");
+    };
+    if state.restream.recording_session(&id).await.is_some() {
+        finish_event_recording(&state.recording_manager, &state.restream, &event).await;
+    }
+    if event.status == EventStatus::Live {
+        finish_event_playback(&state.playback_manager, &id).await;
+    }
     if state.restream.delete_event(&id).await {
         ok(json!({"deleted": true, "id": id}))
     } else {
@@ -2570,6 +2615,7 @@ async fn upload_file(State(state): State<AppState>, mut multipart: Multipart) ->
         let field_name = field.name().unwrap_or_default().to_string();
         if field_name == "file" {
             if received_file {
+                let _ = tokio::fs::remove_file(&temporary_path).await;
                 return bad_request("only one file field is supported");
             }
             received_file = true;
@@ -2582,6 +2628,7 @@ async fn upload_file(State(state): State<AppState>, mut multipart: Multipart) ->
             if let Some(parent) = temporary_path.parent()
                 && let Err(io_error) = tokio::fs::create_dir_all(parent).await
             {
+                let _ = tokio::fs::remove_file(&temporary_path).await;
                 return error(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "storage_error",
@@ -2591,6 +2638,7 @@ async fn upload_file(State(state): State<AppState>, mut multipart: Multipart) ->
             let mut file = match tokio::fs::File::create(&temporary_path).await {
                 Ok(file) => file,
                 Err(io_error) => {
+                    let _ = tokio::fs::remove_file(&temporary_path).await;
                     return error(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "storage_error",
@@ -2632,7 +2680,10 @@ async fn upload_file(State(state): State<AppState>, mut multipart: Multipart) ->
         } else if field_name == "name" {
             match multipart_text(&mut field, 255).await {
                 Ok(value) => name = Some(value),
-                Err(error) => return bad_request(format!("invalid name: {error}")),
+                Err(error) => {
+                    let _ = tokio::fs::remove_file(&temporary_path).await;
+                    return bad_request(format!("invalid name: {error}"));
+                }
             }
         } else if field_name == "labels"
             && let Ok(value) = multipart_text(&mut field, 4096).await
@@ -2653,6 +2704,7 @@ async fn upload_file(State(state): State<AppState>, mut multipart: Multipart) ->
         }
     };
     if !received_file {
+        let _ = tokio::fs::remove_file(&temporary_path).await;
         return bad_request("multipart field `file` is required");
     }
     let path = state.restream.storage_path(&upload_id, &name);
@@ -2953,6 +3005,7 @@ async fn start_studio_session(State(state): State<AppState>, Path(id): Path<Stri
     if let Err(message) =
         start_event_playback(&state.playback_manager, &state.restream, &event).await
     {
+        finish_event_recording(&state.recording_manager, &state.restream, &event).await;
         let _ = state.restream.cancel_event(&event.id).await;
         return error(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -3440,10 +3493,11 @@ async fn test_webhook(State(state): State<AppState>, Path(id): Path<String>) -> 
         return not_found("webhook");
     };
     let payload = json!({"event": "webhook.test", "timestamp": now(), "data": {"healthy": true}});
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
+    let client = match crate::restream::build_safe_http_client(
+        &hook.url,
+        std::time::Duration::from_secs(10),
+    )
+    .await
     {
         Ok(client) => client,
         Err(client_error) => {
@@ -3616,6 +3670,26 @@ mod tests {
             &url::Url::parse("rtmp://127.0.0.1:1935/live").unwrap()
         ));
         assert!(validate_media_input_url("rtmp://127.0.0.1:1935/live", "inputUrl").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_safe_http_client_rejects_private_dns_targets() {
+        assert!(
+            crate::restream::build_safe_http_client(
+                "http://127.0.0.1:8080/hook",
+                std::time::Duration::from_secs(1),
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            crate::restream::build_safe_http_client(
+                "http://[::ffff:127.0.0.1]:8080/hook",
+                std::time::Duration::from_secs(1),
+            )
+            .await
+            .is_err()
+        );
     }
 
     #[test]

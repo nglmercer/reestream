@@ -40,6 +40,11 @@ impl HlsTransmuxer {
     }
 
     pub async fn start(&self) -> Result<mpsc::Sender<Bytes>, String> {
+        // Starting a second process would overwrite the stored child and
+        // sender, leaking the first ffmpeg process. Treat start as a restart
+        // operation so callers are safe even if their state check races.
+        self.stop().await;
+
         // Create segment directory
         tokio::fs::create_dir_all(&self.segment_dir)
             .await

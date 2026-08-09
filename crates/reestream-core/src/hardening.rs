@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::{RwLock, watch};
 use tracing::info;
@@ -156,51 +157,69 @@ impl RateLimiter {
 
 pub struct ConnectionPool {
     max_connections: usize,
-    current: Arc<RwLock<usize>>,
+    current: Arc<AtomicUsize>,
 }
 
 impl ConnectionPool {
     pub fn new(max_connections: usize) -> Self {
         Self {
             max_connections,
-            current: Arc::new(RwLock::new(0)),
+            current: Arc::new(AtomicUsize::new(0)),
         }
     }
 
     pub async fn try_acquire(&self) -> Option<ConnectionGuard> {
-        let mut current = self.current.write().await;
-        if *current < self.max_connections {
-            *current += 1;
-            Some(ConnectionGuard {
-                current: self.current.clone(),
-            })
-        } else {
-            None
+        loop {
+            let current = self.current.load(Ordering::Acquire);
+            if current >= self.max_connections {
+                return None;
+            }
+            if self
+                .current
+                .compare_exchange(current, current + 1, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return Some(ConnectionGuard {
+                    current: self.current.clone(),
+                });
+            }
         }
     }
 
     pub async fn active_connections(&self) -> usize {
-        *self.current.read().await
+        self.current.load(Ordering::Acquire)
     }
 
     pub fn max_connections(&self) -> usize {
         self.max_connections
     }
+
+    pub async fn drain_timeout(&self, timeout: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if self.active_connections().await == 0 {
+                return true;
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            tokio::time::sleep((deadline - now).min(Duration::from_millis(25))).await;
+        }
+    }
 }
 
 pub struct ConnectionGuard {
-    current: Arc<RwLock<usize>>,
+    current: Arc<AtomicUsize>,
 }
 
 impl Drop for ConnectionGuard {
     fn drop(&mut self) {
-        let current = self.current.clone();
-        tokio::spawn(async move {
-            let mut c = current.write().await;
-            if *c > 0 {
-                *c -= 1;
-            }
-        });
+        let _ = self
+            .current
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                current.checked_sub(1)
+            });
     }
 }
 
@@ -355,6 +374,21 @@ mod tests {
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
         assert_eq!(pool.active_connections().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_connection_pool_enforces_limit_until_guard_drops() {
+        let pool = Arc::new(ConnectionPool::new(1));
+        let guard = pool.try_acquire().await.unwrap();
+        assert!(pool.try_acquire().await.is_none());
+
+        let release = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            drop(guard);
+        });
+        assert!(pool.drain_timeout(Duration::from_secs(1)).await);
+        release.await.unwrap();
+        assert!(pool.try_acquire().await.is_some());
     }
 
     #[tokio::test]

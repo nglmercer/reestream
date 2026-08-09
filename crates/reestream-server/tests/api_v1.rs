@@ -319,3 +319,41 @@ async fn scheduled_events_are_promoted_by_the_store() {
         reestream_server::restream::EventStatus::Live
     );
 }
+
+#[tokio::test]
+async fn restored_event_keys_are_available_to_scheduler_and_removed_with_events() {
+    let state_path = std::env::temp_dir().join(format!(
+        "reestream-api-event-state-{}.json",
+        uuid::Uuid::new_v4()
+    ));
+    let store = RestreamStore::with_state_path(&state_path);
+    let event = store
+        .create_event(
+            None,
+            reestream_server::restream::StreamType::Encoder,
+            "Restored scheduled event".into(),
+            String::new(),
+            Some("1970-01-01T00:00:00Z".into()),
+            Vec::new(),
+            None,
+            0,
+        )
+        .await;
+    let expected_key = event.ingest.stream_key.clone();
+
+    let restored = RestreamStore::with_state_path(&state_path);
+    let due = restored.promote_due_events().await;
+    assert_eq!(due.len(), 1);
+    assert_eq!(due[0].ingest.stream_key, expected_key);
+    assert!(restored.accepts_stream_key(&expected_key).await);
+
+    assert!(restored.end_event(&event.id).await.is_some());
+    assert!(!restored.accepts_stream_key(&expected_key).await);
+
+    assert!(restored.delete_event(&event.id).await);
+    assert!(!restored.accepts_stream_key(&expected_key).await);
+
+    let _ = std::fs::remove_file(&state_path);
+    let _ = std::fs::remove_file(state_path.with_extension("key"));
+    let _ = std::fs::remove_file(state_path.with_extension("secrets"));
+}

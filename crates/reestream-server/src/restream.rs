@@ -16,6 +16,7 @@ use serde_json::Value;
 use sha2::Sha256;
 use std::collections::HashMap;
 use std::io::Write;
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,6 +31,70 @@ pub fn now() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+fn is_private_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            let octets = ip.octets();
+            ip.is_loopback()
+                || ip.is_private()
+                || ip.is_link_local()
+                || ip.is_unspecified()
+                || ip.is_multicast()
+                || ip.is_broadcast()
+                || (octets[0] == 100 && (64..=127).contains(&octets[1]))
+                || (octets[0] == 192 && octets[1] == 0 && octets[2] == 0)
+                || (octets[0] == 192 && octets[1] == 0 && octets[2] == 2)
+                || (octets[0] == 198 && octets[1] == 18)
+                || (octets[0] == 198 && octets[1] == 19)
+                || (octets[0] == 198 && octets[1] == 51 && octets[2] == 100)
+                || (octets[0] == 203 && octets[1] == 0 && octets[2] == 113)
+        }
+        IpAddr::V6(ip) => {
+            ip.to_ipv4().is_some_and(|ip| is_private_ip(IpAddr::V4(ip)))
+                || ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_unique_local()
+                || ip.is_unicast_link_local()
+                || ip.is_multicast()
+        }
+    }
+}
+
+/// Build an HTTP client with DNS rebinding protection for webhook delivery.
+/// The resolved address is pinned in reqwest, while the original hostname is
+/// retained for HTTP Host and TLS SNI validation.
+pub(crate) async fn build_safe_http_client(
+    url: &str,
+    timeout: Duration,
+) -> Result<reqwest::Client, String> {
+    let parsed = url::Url::parse(url).map_err(|error| format!("invalid webhook URL: {error}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("webhook URL must use http or https".into());
+    }
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "webhook URL must include a host".to_string())?;
+    let port = parsed
+        .port_or_known_default()
+        .ok_or_else(|| "webhook URL has no known port".to_string())?;
+    let addresses = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|error| format!("webhook host lookup failed: {error}"))?
+        .collect::<Vec<SocketAddr>>();
+    let Some(address) = addresses.first().copied() else {
+        return Err("webhook host has no resolved addresses".into());
+    };
+    if addresses.iter().any(|address| is_private_ip(address.ip())) {
+        return Err("webhook host resolves to a private or reserved address".into());
+    }
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .resolve(host, address)
+        .build()
+        .map_err(|error| format!("webhook client creation failed: {error}"))
 }
 
 fn scheduled_epoch(value: &str) -> Option<u64> {
@@ -1135,12 +1200,16 @@ impl RestreamStore {
         if self.runtime_stream_key().await == stream_key {
             return true;
         }
-        self.data
-            .read()
-            .await
-            .event_stream_keys
-            .values()
-            .any(|key| key == stream_key)
+        let data = self.data.read().await;
+        data.events.iter().any(|event| {
+            matches!(
+                event.status,
+                EventStatus::Draft | EventStatus::Scheduled | EventStatus::Live
+            ) && data
+                .event_stream_keys
+                .get(&event.id)
+                .is_some_and(|key| key == stream_key)
+        })
     }
 
     pub async fn set_runtime_stream_key(&self, stream_key: impl Into<String>) {
@@ -1758,7 +1827,7 @@ impl RestreamStore {
         scheduled_for: Option<Option<String>>,
         destination_ids: Option<Vec<String>>,
     ) -> Option<Event> {
-        let event = self
+        let updated = self
             .mutate(|data| {
                 let event = data.events.iter_mut().find(|event| event.id == event_id)?;
                 if let Some(value) = title {
@@ -1784,10 +1853,12 @@ impl RestreamStore {
                 Some(event.clone())
             })
             .await;
-        if let Some(ref event) = event {
-            self.publish_event("event.updated", event).await;
+        if updated.is_none() {
+            return None;
         }
-        event
+        let event = self.get_event(event_id).await?;
+        self.publish_event("event.updated", &event).await;
+        Some(event)
     }
 
     pub async fn delete_event(&self, event_id: &str) -> bool {
@@ -1795,6 +1866,7 @@ impl RestreamStore {
             .mutate(|data| {
                 let before = data.events.len();
                 data.events.retain(|event| event.id != event_id);
+                data.event_stream_keys.remove(event_id);
                 data.events.len() != before
             })
             .await;
@@ -1806,7 +1878,7 @@ impl RestreamStore {
     }
 
     pub async fn set_event_live(&self, event_id: &str) -> Option<Event> {
-        let event = self
+        let updated = self
             .mutate(|data| {
                 let event = data.events.iter_mut().find(|event| event.id == event_id)?;
                 if matches!(event.status, EventStatus::Ended | EventStatus::Cancelled) {
@@ -1822,17 +1894,19 @@ impl RestreamStore {
                 Some(event.clone())
             })
             .await;
-        if let Some(ref event) = event {
-            self.publish_event("event.started", event).await;
+        if updated.is_none() {
+            return None;
         }
-        event
+        let event = self.get_event(event_id).await?;
+        self.publish_event("event.started", &event).await;
+        Some(event)
     }
 
     pub async fn promote_due_events(&self) -> Vec<Event> {
         let timestamp = now();
-        let due = self
+        let due_ids = self
             .mutate(|data| {
-                let mut due = Vec::new();
+                let mut due_ids = Vec::new();
                 for event in &mut data.events {
                     let scheduled = event.scheduled_for.as_deref().and_then(scheduled_epoch);
                     if event.status == EventStatus::Scheduled
@@ -1841,20 +1915,24 @@ impl RestreamStore {
                         event.status = EventStatus::Live;
                         event.started_at = Some(timestamp);
                         event.updated_at = timestamp;
-                        due.push(event.clone());
+                        due_ids.push(event.id.clone());
                     }
                 }
-                due
+                due_ids
             })
             .await;
-        for event in &due {
-            self.publish_event("event.started", event).await;
+        let mut due = Vec::with_capacity(due_ids.len());
+        for event_id in due_ids {
+            if let Some(event) = self.get_event(&event_id).await {
+                self.publish_event("event.started", &event).await;
+                due.push(event);
+            }
         }
         due
     }
 
     pub async fn end_event(&self, event_id: &str) -> Option<Event> {
-        let event = self
+        let updated = self
             .mutate(|data| {
                 let event = data.events.iter_mut().find(|event| event.id == event_id)?;
                 if event.status != EventStatus::Live {
@@ -1871,25 +1949,32 @@ impl RestreamStore {
                 Some(event.clone())
             })
             .await;
-        if let Some(ref event) = event {
-            self.publish_event("event.ended", event).await;
+        if updated.is_none() {
+            return None;
         }
-        event
+        let event = self.get_event(event_id).await?;
+        self.publish_event("event.ended", &event).await;
+        Some(event)
     }
 
     pub async fn cancel_event(&self, event_id: &str) -> Option<Event> {
-        let event = self
+        let updated = self
             .mutate(|data| {
                 let event = data.events.iter_mut().find(|event| event.id == event_id)?;
+                if matches!(event.status, EventStatus::Ended | EventStatus::Cancelled) {
+                    return None;
+                }
                 event.status = EventStatus::Cancelled;
                 event.updated_at = now();
                 Some(event.clone())
             })
             .await;
-        if let Some(ref event) = event {
-            self.publish_event("event.cancelled", event).await;
+        if updated.is_none() {
+            return None;
         }
-        event
+        let event = self.get_event(event_id).await?;
+        self.publish_event("event.cancelled", &event).await;
+        Some(event)
     }
 
     pub async fn duplicate_event(&self, event_id: &str) -> Option<Draft> {
@@ -1916,15 +2001,20 @@ impl RestreamStore {
         if !exists {
             return None;
         }
-        self.mutate(|data| {
-            let event = data.events.iter_mut().find(|event| event.id == event_id)?;
-            if !event.destination_ids.iter().any(|id| id == channel_id) {
-                event.destination_ids.push(channel_id.to_string());
-            }
-            event.updated_at = now();
-            Some(event.clone())
-        })
-        .await
+        let updated = self
+            .mutate(|data| {
+                let event = data.events.iter_mut().find(|event| event.id == event_id)?;
+                if !event.destination_ids.iter().any(|id| id == channel_id) {
+                    event.destination_ids.push(channel_id.to_string());
+                }
+                event.updated_at = now();
+                Some(event.clone())
+            })
+            .await;
+        if updated.is_none() {
+            return None;
+        }
+        self.get_event(event_id).await
     }
 
     pub async fn remove_event_destination(
@@ -1932,13 +2022,18 @@ impl RestreamStore {
         event_id: &str,
         channel_id: &str,
     ) -> Option<Event> {
-        self.mutate(|data| {
-            let event = data.events.iter_mut().find(|event| event.id == event_id)?;
-            event.destination_ids.retain(|id| id != channel_id);
-            event.updated_at = now();
-            Some(event.clone())
-        })
-        .await
+        let updated = self
+            .mutate(|data| {
+                let event = data.events.iter_mut().find(|event| event.id == event_id)?;
+                event.destination_ids.retain(|id| id != channel_id);
+                event.updated_at = now();
+                Some(event.clone())
+            })
+            .await;
+        if updated.is_none() {
+            return None;
+        }
+        self.get_event(event_id).await
     }
 
     pub async fn list_files(&self, query: Option<&str>) -> Vec<StorageFile> {
@@ -3016,10 +3111,8 @@ impl RestreamStore {
                 Some(format!("sha256={encoded}"))
             });
             tokio::spawn(async move {
-                let client = match reqwest::Client::builder()
-                    .timeout(Duration::from_secs(10))
-                    .redirect(reqwest::redirect::Policy::none())
-                    .build()
+                let client = match build_safe_http_client(&webhook.url, Duration::from_secs(10))
+                    .await
                 {
                     Ok(client) => client,
                     Err(error) => {
@@ -3081,6 +3174,9 @@ impl reestream_core::client::PublishKeyResolver for RestreamStore {
             .iter()
             .find_map(|(event_id, key)| (key == stream_key).then_some(event_id))?;
         let event = data.events.iter().find(|event| &event.id == event_id)?;
+        if matches!(event.status, EventStatus::Ended | EventStatus::Cancelled) {
+            return None;
+        }
         let mut platforms = Vec::new();
         for channel_id in &event.destination_ids {
             let mut channel = data

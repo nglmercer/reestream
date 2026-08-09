@@ -232,6 +232,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (stream_manager, data_bus, platform_event_rx): StreamManagerPair = {
         let sm = Arc::new(reestream::http_server::stream::StreamManager::new());
         let platform_event_rx = sm.subscribe_platform_events();
+        let mut stream_manager_platform_events = sm.subscribe_platform_events();
+        let core_platforms_for_stream_manager = platforms.clone();
+        tokio::spawn(async move {
+            loop {
+                match stream_manager_platform_events.recv().await {
+                    Ok(event) => {
+                        sync_product_platform(&core_platforms_for_stream_manager, &event).await;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
         if let Some(ref config_platforms) = *platform {
             for cp in config_platforms {
                 let name = cp.url.host_str().unwrap_or("unknown").to_string();
@@ -495,7 +508,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             _ = shutdown.wait_for_shutdown() => {
                 info!("Graceful shutdown initiated, draining connections...");
-                let drained = shutdown.drain_timeout(std::time::Duration::from_secs(30)).await;
+                let drained = connection_pool
+                    .drain_timeout(std::time::Duration::from_secs(30))
+                    .await;
                 if drained {
                     info!("All connections drained successfully");
                 } else {
@@ -512,7 +527,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             continue;
                         }
 
-                        let _guard = match connection_pool.try_acquire().await {
+                        let connection_guard = match connection_pool.try_acquire().await {
                             Some(g) => g,
                             None => {
                                 warn!("Connection pool full, rejecting connection from {}", peer_addr);
@@ -537,6 +552,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let resolver = publish_resolver.clone();
                         let reporter = status_reporter.clone();
                         tokio::spawn(async move {
+                            let _connection_guard = connection_guard;
                             if let Err(e) = reestream::client::handle_publisher_with_resolver_and_status(
                                 socket,
                                 platforms,

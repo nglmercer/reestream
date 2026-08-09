@@ -50,17 +50,11 @@ pub enum WebhookEvent {
 
 pub struct WebhookSender {
     config: WebhookConfig,
-    client: reqwest::Client,
 }
 
 impl WebhookSender {
     pub fn new(config: WebhookConfig) -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(config.timeout_secs))
-            .build()
-            .unwrap_or_default();
-
-        Self { config, client }
+        Self { config }
     }
 
     pub fn should_send(&self, event: &WebhookEvent) -> bool {
@@ -81,8 +75,13 @@ impl WebhookSender {
             return Ok(());
         }
 
-        let mut request = self
-            .client
+        let client = crate::restream::build_safe_http_client(
+            &self.config.url,
+            Duration::from_secs(self.config.timeout_secs.max(1)),
+        )
+        .await?;
+
+        let mut request = client
             .post(&self.config.url)
             .json(payload)
             .header("Content-Type", "application/json");

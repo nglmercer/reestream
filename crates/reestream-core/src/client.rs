@@ -1,6 +1,7 @@
 // src/client.rs
 pub mod push;
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,7 +12,7 @@ use rml_rtmp::sessions::{ClientSessionResult, ServerSessionEvent, ServerSessionR
 use rml_rtmp::time::RtmpTimestamp;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::{RwLock, broadcast, mpsc};
+use tokio::sync::{Mutex, RwLock, broadcast, mpsc, watch};
 use tokio::time::timeout;
 use tracing::{error, info, warn};
 use url::Url;
@@ -70,6 +71,50 @@ fn is_video_sequence_header(data: &Bytes) -> bool {
 
 fn is_audio_sequence_header(data: &Bytes) -> bool {
     data.len() > 1 && (data[0] & 0xF0) == 0xA0 && data[1] == 0x00
+}
+
+async fn sync_platforms_for_event(platforms: &Arc<RwLock<Vec<Platform>>>, event: &PlatformEvent) {
+    let mut configured = platforms.write().await;
+    match event {
+        PlatformEvent::Added {
+            platform_id,
+            url,
+            key,
+        } => {
+            if !configured.iter().any(|platform| {
+                platform_id_from(platform.url.as_str(), &platform.key) == *platform_id
+            }) && let Ok(url) = Url::parse(url)
+            {
+                configured.push(Platform {
+                    url,
+                    key: key.clone(),
+                    enabled: true,
+                    orientation: Default::default(),
+                });
+            }
+        }
+        PlatformEvent::Removed { platform_id } => {
+            configured.retain(|platform| {
+                platform_id_from(platform.url.as_str(), &platform.key) != *platform_id
+            });
+        }
+        PlatformEvent::Toggled {
+            platform_id,
+            url,
+            key,
+            enabled,
+        } => {
+            if let Some(platform) = configured.iter_mut().find(|platform| {
+                platform_id_from(platform.url.as_str(), &platform.key) == *platform_id
+            }) {
+                platform.enabled = *enabled;
+                platform.key = key.clone();
+                if let Ok(url) = Url::parse(url) {
+                    platform.url = url;
+                }
+            }
+        }
+    }
 }
 
 async fn report_destination_status(
@@ -169,7 +214,9 @@ pub async fn handle_publisher_with_resolver_and_status(
     status_reporter: Option<Arc<dyn DestinationStatusReporter>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (mut server_session, leftover) = handshake_and_create_server_session(&mut inbound).await?;
-    let (reconnect_tx, mut reconnect_rx) = mpsc::channel::<(usize, PushClient)>(10);
+    let (reconnect_tx, mut reconnect_rx) = mpsc::channel::<(String, PushClient)>(10);
+    let (reconnect_stop_tx, reconnect_stop_rx) = watch::channel(false);
+    let reconnecting_platforms = Arc::new(Mutex::new(HashSet::new()));
 
     let pls: Vec<Platform> = platforms
         .read()
@@ -196,20 +243,59 @@ pub async fn handle_publisher_with_resolver_and_status(
 
     let mut read_buf = [0u8; 8192];
     let mut registered_stream_id: Option<String> = None;
+    let mut platform_events_closed = false;
 
     let result: Result<(), Box<dyn std::error::Error + Send + Sync>> = async {
         loop {
         tokio::select! {
-            Some((index, new_client)) = reconnect_rx.recv() => {
-                if index < push_clients.len() {
-                    info!("Replacing old client with reconnected client at index {}", index);
+            Some((platform_id, new_client)) = reconnect_rx.recv() => {
+                let mut new_client = new_client;
+                if let Some(index) = push_clients
+                    .iter()
+                    .position(|pc| pc.platform_id == platform_id)
+                {
+                    info!("Replacing old client with reconnected client for platform {}", platform_id);
+                    prime_push_client(
+                        &mut new_client,
+                        cached_video_header.clone(),
+                        cached_audio_header.clone(),
+                        cached_metadata.clone(),
+                    )
+                    .await;
                     push_clients[index] = new_client;
+                } else if platforms.read().await.iter().any(|platform| {
+                    platform_id_from(platform.url.as_str(), &platform.key) == platform_id
+                        && platform.enabled
+                }) {
+                    info!("Adding reconnected client for platform {}", platform_id);
+                    prime_push_client(
+                        &mut new_client,
+                        cached_video_header.clone(),
+                        cached_audio_header.clone(),
+                        cached_metadata.clone(),
+                    )
+                    .await;
+                    push_clients.push(new_client);
+                } else {
+                    // The destination was removed or disabled while the
+                    // retry was in flight. Do not revive it after removal.
+                    new_client.shutdown().await;
                 }
             }
 
-            evt = platform_events.recv() => {
+            evt = platform_events.recv(), if !platform_events_closed => {
                 match evt {
                     Ok(PlatformEvent::Toggled { platform_id, url, key, enabled }) => {
+                        sync_platforms_for_event(
+                            &platforms,
+                            &PlatformEvent::Toggled {
+                                platform_id: platform_id.clone(),
+                                url: url.clone(),
+                                key: key.clone(),
+                                enabled,
+                            },
+                        )
+                        .await;
                         if !enabled {
                             // Shutdown and remove the PushClient for this platform
                             if let Some(pos) = push_clients.iter().position(|pc| pc.platform_id == platform_id) {
@@ -237,7 +323,7 @@ pub async fn handle_publisher_with_resolver_and_status(
                                         continue;
                                     }
                                 };
-                                match timeout(Duration::from_secs(5), PushClient::connect_and_publish(&url_parsed, key, cached_video_header.clone(), cached_audio_header.clone(), cached_metadata.clone(), platform_id.clone())).await {
+                                match timeout(Duration::from_secs(5), PushClient::connect_and_publish(&url_parsed, key.clone(), cached_video_header.clone(), cached_audio_header.clone(), cached_metadata.clone(), platform_id.clone())).await {
                                     Ok(Ok(pc)) => {
                                         report_destination_status(
                                             &status_reporter,
@@ -258,12 +344,35 @@ pub async fn handle_publisher_with_resolver_and_status(
                                         )
                                         .await;
                                         error!("Failed to connect to newly enabled platform: {}", url);
+                                        spawn_destination_reconnect(
+                                            &reconnect_tx,
+                                            &reconnect_stop_rx,
+                                            platforms.clone(),
+                                            status_reporter.clone(),
+                                            reconnecting_platforms.clone(),
+                                            url_parsed,
+                                            key,
+                                            cached_video_header.clone(),
+                                            cached_audio_header.clone(),
+                                            cached_metadata.clone(),
+                                            platform_id.clone(),
+                                        )
+                                        .await;
                                     },
                                 }
                             }
                         }
                     }
                     Ok(PlatformEvent::Added { platform_id, url, key }) => {
+                        sync_platforms_for_event(
+                            &platforms,
+                            &PlatformEvent::Added {
+                                platform_id: platform_id.clone(),
+                                url: url.clone(),
+                                key: key.clone(),
+                            },
+                        )
+                        .await;
                         // A new platform was added while streaming — connect to it
                         if push_clients.iter().any(|pc| pc.platform_id == platform_id) {
                             info!("Platform {} already has an active PushClient", platform_id);
@@ -276,7 +385,7 @@ pub async fn handle_publisher_with_resolver_and_status(
                                     continue;
                                 }
                             };
-                            match timeout(Duration::from_secs(5), PushClient::connect_and_publish(&url_parsed, key, cached_video_header.clone(), cached_audio_header.clone(), cached_metadata.clone(), platform_id.clone())).await {
+                            match timeout(Duration::from_secs(5), PushClient::connect_and_publish(&url_parsed, key.clone(), cached_video_header.clone(), cached_audio_header.clone(), cached_metadata.clone(), platform_id.clone())).await {
                                 Ok(Ok(pc)) => {
                                     report_destination_status(
                                         &status_reporter,
@@ -297,11 +406,32 @@ pub async fn handle_publisher_with_resolver_and_status(
                                     )
                                     .await;
                                     error!("Failed to connect to new platform: {}", url);
+                                    spawn_destination_reconnect(
+                                        &reconnect_tx,
+                                        &reconnect_stop_rx,
+                                        platforms.clone(),
+                                        status_reporter.clone(),
+                                        reconnecting_platforms.clone(),
+                                        url_parsed,
+                                        key,
+                                        cached_video_header.clone(),
+                                        cached_audio_header.clone(),
+                                        cached_metadata.clone(),
+                                        platform_id.clone(),
+                                    )
+                                    .await;
                                 },
                             }
                         }
                     }
                     Ok(PlatformEvent::Removed { platform_id }) => {
+                        sync_platforms_for_event(
+                            &platforms,
+                            &PlatformEvent::Removed {
+                                platform_id: platform_id.clone(),
+                            },
+                        )
+                        .await;
                         // Platform removed — shutdown and remove the PushClient
                         if let Some(pos) = push_clients.iter().position(|pc| pc.platform_id == platform_id) {
                             let pc = push_clients.remove(pos);
@@ -317,9 +447,7 @@ pub async fn handle_publisher_with_resolver_and_status(
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(broadcast::error::RecvError::Closed) => {
-                        // Event channel closed, continue without platform events
-                    }
+                    Err(broadcast::error::RecvError::Closed) => platform_events_closed = true,
                 }
             }
 
@@ -430,6 +558,20 @@ pub async fn handle_publisher_with_resolver_and_status(
                                                     )
                                                     .await;
                                                     error!("Failed to connect to platform: {}", p.url);
+                                                    spawn_destination_reconnect(
+                                                        &reconnect_tx,
+                                                        &reconnect_stop_rx,
+                                                        platforms.clone(),
+                                                        status_reporter.clone(),
+                                                        reconnecting_platforms.clone(),
+                                                        p.url.clone(),
+                                                        p.key.clone(),
+                                                        None,
+                                                        None,
+                                                        None,
+                                                        pid.clone(),
+                                                    )
+                                                    .await;
                                                 },
                                             }
                                         }
@@ -455,6 +597,8 @@ pub async fn handle_publisher_with_resolver_and_status(
                                     true,
                                     platforms.clone(),
                                     status_reporter.clone(),
+                                    reconnect_stop_rx.clone(),
+                                    reconnecting_platforms.clone(),
                                 )
                                 .await;
                             }
@@ -474,6 +618,8 @@ pub async fn handle_publisher_with_resolver_and_status(
                                     false,
                                     platforms.clone(),
                                     status_reporter.clone(),
+                                    reconnect_stop_rx.clone(),
+                                    reconnecting_platforms.clone(),
                                 )
                                 .await;
                             }
@@ -502,6 +648,7 @@ pub async fn handle_publisher_with_resolver_and_status(
     }
     .await;
 
+    let _ = reconnect_stop_tx.send(true);
     if let Some(id) = registered_stream_id.take() {
         if let Some(pubber) = &data_publisher {
             pubber.deactivate_stream(&id);
@@ -520,16 +667,164 @@ pub async fn handle_publisher_with_resolver_and_status(
     result
 }
 
+async fn prime_push_client(
+    client: &mut PushClient,
+    video_header: Option<Bytes>,
+    audio_header: Option<Bytes>,
+    metadata: Option<rml_rtmp::sessions::StreamMetadata>,
+) {
+    let mut state = client.client_state.write().await;
+    if video_header.is_some() {
+        state.video_sequence_header = video_header;
+    }
+    if audio_header.is_some() {
+        state.audio_sequence_header = audio_header;
+    }
+    if metadata.is_some() {
+        state.prepublish_metadata = metadata;
+    }
+    if *client.publish_ready_rx.borrow() {
+        PushClient::drain_buffers(&mut state, &client.tx_feed);
+    }
+}
+
+async fn spawn_destination_reconnect(
+    reconnect_tx: &mpsc::Sender<(String, PushClient)>,
+    reconnect_stop: &watch::Receiver<bool>,
+    platforms: Arc<RwLock<Vec<Platform>>>,
+    status_reporter: Option<Arc<dyn DestinationStatusReporter>>,
+    reconnecting_platforms: Arc<Mutex<HashSet<String>>>,
+    url: Url,
+    stream_key: String,
+    cached_video_header: Option<Bytes>,
+    cached_audio_header: Option<Bytes>,
+    cached_metadata: Option<rml_rtmp::sessions::StreamMetadata>,
+    platform_id: String,
+) {
+    {
+        let mut active = reconnecting_platforms.lock().await;
+        if !active.insert(platform_id.clone()) {
+            return;
+        }
+    }
+
+    let mut reconnect_stop = reconnect_stop.clone();
+    let reconnect_tx = reconnect_tx.clone();
+    tokio::spawn(async move {
+        info!(
+            "Starting destination reconnection loop for platform {}",
+            platform_id
+        );
+
+        if *reconnect_stop.borrow() {
+            reconnecting_platforms.lock().await.remove(&platform_id);
+            return;
+        }
+
+        loop {
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(2)) => {}
+                changed = reconnect_stop.changed() => {
+                    if changed.is_err() || *reconnect_stop.borrow() {
+                        break;
+                    }
+                }
+            }
+            if *reconnect_stop.borrow() {
+                break;
+            }
+
+            let platform_still_enabled = platforms.read().await.iter().any(|platform| {
+                platform_id_from(platform.url.as_str(), &platform.key) == platform_id
+                    && platform.enabled
+            });
+            if !platform_still_enabled {
+                report_destination_status(&status_reporter, &platform_id, "disconnected", None)
+                    .await;
+                info!(
+                    "Platform {} is no longer enabled, abandoning reconnection",
+                    platform_id
+                );
+                break;
+            }
+
+            match timeout(
+                Duration::from_secs(5),
+                PushClient::connect_and_publish(
+                    &url,
+                    stream_key.clone(),
+                    cached_video_header.clone(),
+                    cached_audio_header.clone(),
+                    cached_metadata.clone(),
+                    platform_id.clone(),
+                ),
+            )
+            .await
+            {
+                Ok(Ok(new_client)) => {
+                    if *reconnect_stop.borrow() {
+                        new_client.shutdown().await;
+                        break;
+                    }
+                    report_destination_status(&status_reporter, &platform_id, "connected", None)
+                        .await;
+                    if reconnect_tx
+                        .send((platform_id.clone(), new_client))
+                        .await
+                        .is_err()
+                    {
+                        warn!(
+                            "Main publisher loop closed, abandoning reconnection for {}",
+                            platform_id
+                        );
+                    }
+                    break;
+                }
+                Ok(Err(error)) => {
+                    report_destination_status(
+                        &status_reporter,
+                        &platform_id,
+                        "error",
+                        Some("destination connection failed".into()),
+                    )
+                    .await;
+                    warn!(
+                        "Reconnection failed for platform {}: {}. Retrying...",
+                        platform_id, error
+                    );
+                }
+                Err(_) => {
+                    report_destination_status(
+                        &status_reporter,
+                        &platform_id,
+                        "error",
+                        Some("destination connection timed out".into()),
+                    )
+                    .await;
+                    warn!(
+                        "Reconnection timed out for platform {}. Retrying...",
+                        platform_id
+                    );
+                }
+            }
+        }
+
+        reconnecting_platforms.lock().await.remove(&platform_id);
+    });
+}
+
 async fn forward_to_push_clients(
     push_clients: &mut [PushClient],
-    reconnect_tx: &mpsc::Sender<(usize, PushClient)>,
+    reconnect_tx: &mpsc::Sender<(String, PushClient)>,
     data: Bytes,
     timestamp: RtmpTimestamp,
     is_video: bool,
     platforms: Arc<RwLock<Vec<Platform>>>,
     status_reporter: Option<Arc<dyn DestinationStatusReporter>>,
+    reconnect_stop: watch::Receiver<bool>,
+    reconnecting_platforms: Arc<Mutex<HashSet<String>>>,
 ) {
-    for (i, pc) in push_clients.iter_mut().enumerate() {
+    for pc in push_clients.iter_mut() {
         let mut state = pc.client_state.write().await;
 
         if is_video && is_video_sequence_header(&data) {
@@ -542,10 +837,6 @@ async fn forward_to_push_clients(
             let p_url = pc.url.clone();
             let p_key = pc.stream_key.clone();
             let p_platform_id = pc.platform_id.clone();
-            let tx_back = reconnect_tx.clone();
-            let platforms_clone = platforms.clone();
-            let status_reporter_clone = status_reporter.clone();
-
             let cached_vid = state.video_sequence_header.clone();
             let cached_aud = state.audio_sequence_header.clone();
             let cached_meta = state.prepublish_metadata.clone();
@@ -555,77 +846,22 @@ async fn forward_to_push_clients(
             let (dummy_tx, mut dummy_rx) = mpsc::channel(1);
             pc.tx_feed = dummy_tx;
 
-            tokio::spawn(async move {
-                let _drainer =
-                    tokio::spawn(async move { while dummy_rx.recv().await.is_some() {} });
+            tokio::spawn(async move { while dummy_rx.recv().await.is_some() {} });
 
-                info!(
-                    "Connection lost for platform {}. Starting reconnection loop...",
-                    i
-                );
-
-                loop {
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-
-                    // Check if platform is still enabled before reconnecting
-                    {
-                        let pls = platforms_clone.read().await;
-                        let platform_still_enabled = pls.iter().any(|p| {
-                            platform_id_from(p.url.as_str(), &p.key) == p_platform_id && p.enabled
-                        });
-                        if !platform_still_enabled {
-                            report_destination_status(
-                                &status_reporter_clone,
-                                &p_platform_id,
-                                "disconnected",
-                                None,
-                            )
-                            .await;
-                            info!(
-                                "Platform {} is no longer enabled, abandoning reconnection",
-                                p_platform_id
-                            );
-                            break;
-                        }
-                    }
-
-                    match PushClient::connect_and_publish(
-                        &p_url,
-                        p_key.clone(),
-                        cached_vid.clone(),
-                        cached_aud.clone(),
-                        cached_meta.clone(),
-                        p_platform_id.clone(),
-                    )
-                    .await
-                    {
-                        Ok(new_pc) => {
-                            report_destination_status(
-                                &status_reporter_clone,
-                                &p_platform_id,
-                                "connected",
-                                None,
-                            )
-                            .await;
-                            info!("Reconnection successful for platform index {}", i);
-                            if tx_back.send((i, new_pc)).await.is_err() {
-                                warn!("Main loop closed, abandoning reconnection for {}", i);
-                            }
-                            break;
-                        }
-                        Err(e) => {
-                            report_destination_status(
-                                &status_reporter_clone,
-                                &p_platform_id,
-                                "error",
-                                Some("destination connection failed".into()),
-                            )
-                            .await;
-                            warn!("Reconnection failed for platform {}: {}. Retrying...", i, e);
-                        }
-                    }
-                }
-            });
+            spawn_destination_reconnect(
+                reconnect_tx,
+                &reconnect_stop,
+                platforms.clone(),
+                status_reporter.clone(),
+                reconnecting_platforms.clone(),
+                p_url,
+                p_key,
+                cached_vid,
+                cached_aud,
+                cached_meta,
+                p_platform_id,
+            )
+            .await;
             continue;
         }
 

@@ -127,6 +127,8 @@ RESTREAM_OAUTH_YOUTUBE_CLIENT_SECRET=...
 RESTREAM_OAUTH_YOUTUBE_AUTHORIZE_URL=https://provider.example/authorize
 RESTREAM_OAUTH_YOUTUBE_TOKEN_URL=https://provider.example/token
 RESTREAM_OAUTH_YOUTUBE_SCOPES='stream chat read'
+# Optional exact callback allowlist entry:
+RESTREAM_OAUTH_YOUTUBE_REDIRECT_URI=https://app.example.com/oauth/callback
 ```
 
 The code exchange body includes `code`, `redirectUri`, and the same `state`

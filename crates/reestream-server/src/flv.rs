@@ -60,6 +60,10 @@ impl FlvState {
     }
 
     pub async fn subscribe_with_recent(&self) -> (Vec<Bytes>, broadcast::Receiver<Bytes>) {
+        // Subscribe before taking the snapshot so packets arriving while the
+        // recent buffer is being read are not lost in the snapshot/subscribe
+        // gap.
+        let rx = self.tx.subscribe();
         let mut recent = Vec::new();
 
         // Prepend sequence headers so new viewers can start decoding immediately
@@ -71,7 +75,6 @@ impl FlvState {
         }
 
         recent.extend(self.segments.read().await.iter().cloned());
-        let rx = self.tx.subscribe();
         (recent, rx)
     }
 }

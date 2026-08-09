@@ -209,6 +209,8 @@ impl StreamManager {
     ) -> bool {
         let mut platforms = self.platforms.write().await;
         if let Some(platform) = platforms.iter_mut().find(|p| p.id == id) {
+            let previous_platform_id = platform_id_from(&platform.url, &platform.key);
+            let previous_enabled = platform.enabled;
             if let Some(n) = name {
                 platform.name = n;
             }
@@ -219,14 +221,47 @@ impl StreamManager {
                 platform.key = k;
             }
             if let Some(e) = enabled {
-                let pid = platform_id_from(&platform.url, &platform.key);
-                let _ = self.platform_event_tx.send(PlatformEvent::Toggled {
-                    platform_id: pid,
-                    url: platform.url.clone(),
-                    key: platform.key.clone(),
-                    enabled: e,
-                });
                 platform.enabled = e;
+            }
+
+            let current_platform_id = platform_id_from(&platform.url, &platform.key);
+            let current_enabled = platform.enabled;
+            let current_url = platform.url.clone();
+            let current_key = platform.key.clone();
+            let platform_id_changed = previous_platform_id != current_platform_id;
+            drop(platforms);
+
+            if platform_id_changed {
+                // URL/key are part of the stable destination identity. Remove
+                // the old push client before advertising the replacement so a
+                // live publisher cannot keep sending to stale credentials.
+                let _ = self.platform_event_tx.send(PlatformEvent::Removed {
+                    platform_id: previous_platform_id,
+                });
+                if current_enabled {
+                    let _ = self.platform_event_tx.send(PlatformEvent::Added {
+                        platform_id: current_platform_id,
+                        url: current_url,
+                        key: current_key,
+                    });
+                }
+            } else if enabled.is_some() {
+                let _ = self.platform_event_tx.send(PlatformEvent::Toggled {
+                    platform_id: current_platform_id,
+                    url: current_url,
+                    key: current_key,
+                    enabled: current_enabled,
+                });
+            } else if previous_enabled != current_enabled {
+                // This branch is defensive: enabled can only change through
+                // the explicit option above, but keeps the event contract
+                // correct if the update logic changes later.
+                let _ = self.platform_event_tx.send(PlatformEvent::Toggled {
+                    platform_id: current_platform_id,
+                    url: current_url,
+                    key: current_key,
+                    enabled: current_enabled,
+                });
             }
             true
         } else {
@@ -424,6 +459,39 @@ mod tests {
         let platforms = manager.get_platforms().await;
         assert_eq!(platforms[0].url, "rtmp://new.server/app");
         assert_eq!(platforms[0].key, "new-key");
+    }
+
+    #[tokio::test]
+    async fn test_update_platform_url_and_key_emits_remove_and_add() {
+        let manager = StreamManager::new();
+        let mut events = manager.subscribe_platform_events();
+        let id = manager
+            .add_platform("Twitch".into(), "rtmp://twitch.tv".into(), "key".into())
+            .await;
+        let _ = events.recv().await.unwrap();
+
+        let old_platform_id = platform_id_from("rtmp://twitch.tv", "key");
+        let new_platform_id = platform_id_from("rtmp://new.server/app", "new-key");
+        assert!(
+            manager
+                .update_platform(
+                    &id,
+                    None,
+                    Some("rtmp://new.server/app".into()),
+                    Some("new-key".into()),
+                    None,
+                )
+                .await
+        );
+
+        assert!(matches!(
+            events.recv().await.unwrap(),
+            PlatformEvent::Removed { platform_id } if platform_id == old_platform_id
+        ));
+        assert!(matches!(
+            events.recv().await.unwrap(),
+            PlatformEvent::Added { platform_id, .. } if platform_id == new_platform_id
+        ));
     }
 
     #[tokio::test]
