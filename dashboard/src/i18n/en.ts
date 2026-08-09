@@ -8,6 +8,16 @@ export const en = {
   'header.settings': 'Settings',
   'header.language': 'Language',
 
+  // Authentication
+  'auth.title': 'Sign in to Reestream',
+  'auth.description': 'Use the administrator credentials configured for this server.',
+  'auth.email': 'Email',
+  'auth.password': 'Password',
+  'auth.signIn': 'Sign in',
+  'auth.signingIn': 'Signing in…',
+  'auth.invalidCredentials': 'Invalid credentials.',
+  'auth.signOut': 'Sign out',
+
   // Product shell and redesigned dashboard
   'nav.freePlan': 'Free plan',
   'nav.invite': 'Invite members',

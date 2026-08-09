@@ -149,6 +149,9 @@ impl ConfigBuilder {
             if p.url.host().is_none() {
                 return Err(format!("platform[{i}] url has no host"));
             }
+            if !matches!(p.url.scheme(), "rtmp" | "rtmps") {
+                return Err(format!("platform[{i}] url must use rtmp:// or rtmps://"));
+            }
         }
         Ok(())
     }

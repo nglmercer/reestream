@@ -12,15 +12,28 @@ use crate::flv;
 pub struct HlsTransmuxer {
     segment_dir: PathBuf,
     playlist_path: PathBuf,
+    ffmpeg_path: PathBuf,
     child: Arc<Mutex<Option<Child>>>,
     tx: Arc<Mutex<Option<mpsc::Sender<Bytes>>>>,
 }
 
 impl HlsTransmuxer {
     pub fn new(segment_dir: PathBuf, playlist_path: PathBuf) -> Self {
+        let ffmpeg_path = std::env::var_os("RESTREAM_FFMPEG_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("ffmpeg"));
+        Self::new_with_ffmpeg(segment_dir, playlist_path, ffmpeg_path)
+    }
+
+    pub fn new_with_ffmpeg(
+        segment_dir: PathBuf,
+        playlist_path: PathBuf,
+        ffmpeg_path: PathBuf,
+    ) -> Self {
         Self {
             segment_dir,
             playlist_path,
+            ffmpeg_path,
             child: Arc::new(Mutex::new(None)),
             tx: Arc::new(Mutex::new(None)),
         }
@@ -31,13 +44,19 @@ impl HlsTransmuxer {
         tokio::fs::create_dir_all(&self.segment_dir)
             .await
             .map_err(|e| format!("Failed to create HLS segment dir: {e}"))?;
-
-        // Check if ffmpeg is available
-        let ffmpeg_path = which_ffmpeg().await?;
+        if let Ok(mut entries) = tokio::fs::read_dir(&self.segment_dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                if path.extension().and_then(|extension| extension.to_str()) == Some("ts") {
+                    let _ = tokio::fs::remove_file(path).await;
+                }
+            }
+        }
+        let _ = tokio::fs::remove_file(&self.playlist_path).await;
 
         let segment_pattern = self.segment_dir.join("seg%03d.ts");
 
-        let mut child = Command::new(&ffmpeg_path)
+        let mut child = Command::new(&self.ffmpeg_path)
             .args([
                 "-hide_banner",
                 "-loglevel",
@@ -122,6 +141,7 @@ impl HlsTransmuxer {
     }
 }
 
+#[cfg(test)]
 async fn which_ffmpeg() -> Result<String, String> {
     let output = tokio::process::Command::new("which")
         .arg("ffmpeg")

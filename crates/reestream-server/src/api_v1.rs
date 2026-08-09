@@ -19,6 +19,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
 use crate::http::AppState;
@@ -120,7 +121,7 @@ fn parse_url(value: &str, field: &str) -> Result<(), Response> {
     Ok(())
 }
 
-fn parse_destination_url(value: &str, field: &str) -> Result<(), Response> {
+pub(crate) fn parse_destination_url(value: &str, field: &str) -> Result<(), Response> {
     let parsed = url::Url::parse(value)
         .map_err(|_| bad_request(format!("{field} must be a valid RTMP URL")))?;
     if !matches!(parsed.scheme(), "rtmp" | "rtmps") || parsed.host_str().is_none() {
@@ -139,22 +140,81 @@ fn parse_http_url(value: &str, field: &str) -> Result<url::Url, Response> {
             "{field} must use http:// or https:// and include a host"
         )));
     }
+    if is_private_host(&parsed) {
+        return Err(bad_request(format!(
+            "{field} cannot target a private address"
+        )));
+    }
+    Ok(parsed)
+}
+
+pub(crate) fn validate_media_input_url(value: &str, field: &str) -> Result<(), Response> {
+    if value.len() > 2048 {
+        return Err(bad_request(format!("{field} is too long")));
+    }
+    let parsed = url::Url::parse(value)
+        .map_err(|_| bad_request(format!("{field} must be a valid media URL")))?;
+    if !matches!(parsed.scheme(), "http" | "https" | "rtmp" | "rtmps")
+        || parsed.host_str().is_none()
+        || parsed.username() != ""
+        || parsed.password().is_some()
+    {
+        return Err(bad_request(format!(
+            "{field} must use http(s) or RTMP without embedded credentials"
+        )));
+    }
+    let allow_private = std::env::var("RESTREAM_ALLOW_PRIVATE_MEDIA_INPUTS")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if !allow_private && is_private_host(&parsed) {
+        return Err(bad_request(format!(
+            "{field} cannot target a private address unless RESTREAM_ALLOW_PRIVATE_MEDIA_INPUTS is enabled"
+        )));
+    }
+    Ok(())
+}
+
+fn is_private_host(parsed: &url::Url) -> bool {
     if let Some(host) = parsed.host_str()
         && (host.eq_ignore_ascii_case("localhost")
             || host.ends_with(".localhost")
             || host.ends_with(".local"))
     {
-        return Err(bad_request(format!("{field} cannot target a local hostname")));
+        return true;
     }
-    if let Some(ip) = parsed.host().and_then(|host| match host {
-        url::Host::Ipv4(ip) => Some(std::net::IpAddr::V4(ip)),
-        url::Host::Ipv6(ip) => Some(std::net::IpAddr::V6(ip)),
-        url::Host::Domain(_) => None,
-    }) && (ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified())
-    {
-        return Err(bad_request(format!("{field} cannot target a private address")));
+    parsed.host().is_some_and(|host| match host {
+        url::Host::Ipv4(ip) => {
+            ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified()
+        }
+        url::Host::Ipv6(ip) => {
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_unique_local()
+                || ip.is_unicast_link_local()
+        }
+        url::Host::Domain(_) => false,
+    })
+}
+
+async fn validate_destination_ids(store: &RestreamStore, ids: &[String]) -> Result<(), Response> {
+    for destination_id in ids {
+        if store.get_channel(destination_id).await.is_none() {
+            return Err(error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "unknown_channel",
+                format!("channel {destination_id} does not exist"),
+            ));
+        }
     }
-    Ok(parsed)
+    Ok(())
+}
+
+fn max_upload_bytes() -> u64 {
+    std::env::var("RESTREAM_MAX_UPLOAD_BYTES")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(2 * 1024 * 1024 * 1024)
 }
 
 fn required(value: &str, field: &str) -> Result<String, Response> {
@@ -664,7 +724,7 @@ pub fn routes(state: AppState) -> Router<AppState> {
     public.merge(protected_routes(state))
 }
 
-async fn require_auth(
+pub(crate) async fn require_auth(
     State(state): State<AppState>,
     request: Request<Body>,
     next: Next,
@@ -677,6 +737,7 @@ async fn require_auth(
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
+        .or_else(|| websocket_access_token(request.headers()))
         .or_else(|| query_access_token(request.uri().query()))
         .unwrap_or_default();
     if state.restream.validate_access_token(token).await {
@@ -688,6 +749,17 @@ async fn require_auth(
             "valid Bearer token required",
         )
     }
+}
+
+fn websocket_access_token(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get("sec-websocket-protocol")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| {
+            value
+                .split(',')
+                .find_map(|protocol| protocol.trim().strip_prefix("reestream-bearer-"))
+        })
 }
 
 fn query_access_token(query: Option<&str>) -> Option<&str> {
@@ -709,6 +781,7 @@ async fn dashboard_status(State(state): State<AppState>) -> Response {
         "uptimeSeconds": state.start_time.elapsed().as_secs(),
         "activeStreams": streams.len(),
         "totalViewers": total_viewers,
+        "authRequired": state.restream.auth_required(),
     }))
 }
 
@@ -732,6 +805,17 @@ async fn save_setup(
             "setup_already_completed",
             "initial setup is already complete; authenticate before changing configuration",
         );
+    }
+    if request.stream_key.trim().is_empty() {
+        return bad_request("streamKey is required");
+    }
+    for platform in &request.platforms {
+        if platform.key.trim().is_empty() {
+            return bad_request("platform keys are required");
+        }
+        if let Err(response) = parse_destination_url(&platform.url, "platform url") {
+            return response;
+        }
     }
     let request = reestream_core::setup::SetupRequest {
         rtmp_addr: request.rtmp_addr,
@@ -768,7 +852,9 @@ async fn list_platform_catalog() -> Response {
 }
 
 async fn list_ingest_servers(State(state): State<AppState>) -> Response {
-    ok(ingest_servers_for_url(&state.restream.runtime_ingest_url().await))
+    ok(ingest_servers_for_url(
+        &state.restream.runtime_ingest_url().await,
+    ))
 }
 
 async fn login(State(state): State<AppState>, Json(request): Json<LoginRequest>) -> Response {
@@ -821,8 +907,8 @@ async fn selected_ingest(State(state): State<AppState>) -> Response {
 async fn global_stream_key(State(state): State<AppState>) -> Response {
     let stream_key = state.restream.runtime_stream_key().await;
     if !stream_key.is_empty() {
-            let srt_url = srt_ingest_url(&stream_key);
-            ok(json!({"streamKey": stream_key, "srtUrl": srt_url}))
+        let srt_url = srt_ingest_url(&stream_key);
+        ok(json!({"streamKey": stream_key, "srtUrl": srt_url}))
     } else {
         error(
             StatusCode::NOT_FOUND,
@@ -833,18 +919,22 @@ async fn global_stream_key(State(state): State<AppState>) -> Response {
 }
 
 async fn reset_global_stream_key(State(state): State<AppState>) -> Response {
-    match reestream_core::setup::reset_stream_key(&state.config_path) {
-        Ok(stream_key) => {
-            state.restream.set_runtime_stream_key(stream_key.clone()).await;
-            let srt_url = srt_ingest_url(&stream_key);
-            ok(json!({"streamKey": stream_key, "srtUrl": srt_url}))
+    let stream_key = match reestream_core::setup::reset_stream_key(&state.config_path) {
+        Ok(stream_key) => stream_key,
+        Err(reset_error) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "config_unavailable",
+                reset_error.to_string(),
+            );
         }
-        Err(reset_error) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "config_unavailable",
-            reset_error.to_string(),
-        ),
-    }
+    };
+    state
+        .restream
+        .set_runtime_stream_key(stream_key.clone())
+        .await;
+    let srt_url = srt_ingest_url(&stream_key);
+    ok(json!({"streamKey": stream_key, "srtUrl": srt_url}))
 }
 
 async fn chat_url() -> Response {
@@ -881,6 +971,7 @@ async fn oauth_authorize(
     State(state): State<AppState>,
     Path(platform): Path<String>,
     Query(query): Query<OAuthAuthorizeQuery>,
+    headers: HeaderMap,
 ) -> Response {
     let Some(client_id) = oauth_setting(&platform, "CLIENT_ID") else {
         return error(
@@ -915,6 +1006,7 @@ async fn oauth_authorize(
             query.state.clone(),
             platform.clone(),
             query.redirect_uri.clone(),
+            bearer(&headers).unwrap_or_default().to_string(),
         )
         .await;
     let scope = query
@@ -939,6 +1031,7 @@ async fn oauth_authorize(
 async fn oauth_token(
     State(state): State<AppState>,
     Path(platform): Path<String>,
+    headers: HeaderMap,
     Json(request): Json<OAuthTokenRequest>,
 ) -> Response {
     let Some(client_id) = oauth_setting(&platform, "CLIENT_ID") else {
@@ -984,7 +1077,12 @@ async fn oauth_token(
         };
         if !state
             .restream
-            .consume_oauth_state(state_token, &platform, redirect_uri)
+            .consume_oauth_state(
+                state_token,
+                &platform,
+                redirect_uri,
+                bearer(&headers).unwrap_or_default(),
+            )
             .await
         {
             return error(
@@ -1007,7 +1105,21 @@ async fn oauth_token(
         }
         form.push(("redirect_uri".into(), redirect_uri));
     }
-    let response = match reqwest::Client::new()
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+    {
+        Ok(client) => client,
+        Err(client_error) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "oauth_client",
+                client_error.to_string(),
+            );
+        }
+    };
+    let response = match client
         .post(&token_url)
         .basic_auth(&client_id, Some(&client_secret))
         .form(&form)
@@ -1183,6 +1295,13 @@ async fn update_channel(
             return response;
         }
     }
+    if request
+        .stream_key
+        .as_deref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return bad_request("streamKey cannot be empty; omit it to keep the existing key");
+    }
     match state
         .restream
         .update_channel(
@@ -1224,6 +1343,20 @@ async fn create_draft(
         Ok(value) => value,
         Err(response) => return response,
     };
+    let destination_ids = request.destination_ids.unwrap_or_default();
+    if let Err(response) = validate_destination_ids(&state.restream, &destination_ids).await {
+        return response;
+    }
+    if let Some(brand_id) = request.brand_id.as_deref()
+        && !state
+            .restream
+            .list_brands()
+            .await
+            .iter()
+            .any(|brand| brand.id == brand_id)
+    {
+        return not_found("brand");
+    }
     let draft = state
         .restream
         .create_draft(
@@ -1231,7 +1364,7 @@ async fn create_draft(
             stream_type,
             request.title.unwrap_or_default(),
             request.description.unwrap_or_default(),
-            request.destination_ids.unwrap_or_default(),
+            destination_ids,
             request.brand_id,
         )
         .await;
@@ -1250,6 +1383,21 @@ async fn update_draft(
     Path(id): Path<String>,
     Json(request): Json<UpdateDraftRequest>,
 ) -> Response {
+    if let Some(destination_ids) = request.destination_ids.as_ref()
+        && let Err(response) = validate_destination_ids(&state.restream, destination_ids).await
+    {
+        return response;
+    }
+    if let Some(brand_id) = request.brand_id.as_deref()
+        && !state
+            .restream
+            .list_brands()
+            .await
+            .iter()
+            .any(|brand| brand.id == brand_id)
+    {
+        return not_found("brand");
+    }
     match state
         .restream
         .update_draft(
@@ -1348,8 +1496,11 @@ async fn create_event(
         return bad_request("fileId is required for file and playlist events");
     }
     if let Some(file_id) = request.file_id.as_deref() {
-        if state.restream.get_file(file_id).await.is_none() {
+        let Some(file) = state.restream.get_file(file_id).await else {
             return not_found("storage file");
+        };
+        if !state.restream.is_managed_storage_path(&file.path) {
+            return bad_request("source file must be inside the storage root");
         }
     }
     if let Some(draft_id) = request.draft_id.as_deref() {
@@ -1358,14 +1509,8 @@ async fn create_event(
         }
     }
     let destination_ids = request.destination_ids.unwrap_or_default();
-    for destination_id in &destination_ids {
-        if state.restream.get_channel(destination_id).await.is_none() {
-            return error(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "unknown_channel",
-                format!("channel {destination_id} does not exist"),
-            );
-        }
+    if let Err(response) = validate_destination_ids(&state.restream, &destination_ids).await {
+        return response;
     }
     let event = state
         .restream
@@ -1402,6 +1547,11 @@ async fn update_event(
         && !is_valid_scheduled_for(scheduled_for)
     {
         return bad_request("scheduledFor must be a Unix timestamp or RFC3339 value");
+    }
+    if let Some(destination_ids) = request.destination_ids.as_ref()
+        && let Err(response) = validate_destination_ids(&state.restream, destination_ids).await
+    {
+        return response;
     }
     match state
         .restream
@@ -1477,11 +1627,21 @@ async fn event_srt_keys(State(state): State<AppState>, Path(id): Path<String>) -
     } else {
         event.ingest.stream_key
     };
-    let passphrase = std::env::var("RESTREAM_SRT_PASSPHRASE")
-        .ok()
-        .filter(|value| !value.is_empty());
+    let passphrase = if srt_enabled() {
+        std::env::var("RESTREAM_SRT_PASSPHRASE")
+            .ok()
+            .filter(|value| !value.is_empty())
+    } else {
+        None
+    };
+    let primary = srt_ingest_url(&stream_id).map(|url| {
+        json!({
+            "url": url,
+            "passphrase": passphrase,
+        })
+    });
     ok(json!({
-        "primary": {"url": srt_ingest_url(&stream_id), "passphrase": passphrase},
+        "primary": primary,
         "backup": null
     }))
 }
@@ -1492,15 +1652,27 @@ fn configured_rtmps_url() -> Option<String> {
         .filter(|value| value.starts_with("rtmps://"))
 }
 
-fn srt_ingest_url(stream_id: &str) -> String {
+fn srt_enabled() -> bool {
+    std::env::var("RESTREAM_SRT_ENABLED")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+        && std::env::var("RESTREAM_SRT_PASSPHRASE")
+            .ok()
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn srt_ingest_url(stream_id: &str) -> Option<String> {
+    if !srt_enabled() {
+        return None;
+    }
     let port = std::env::var("RESTREAM_SRT_PORT")
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(3000);
-    let mut url = url::Url::parse(&format!("srt://localhost:{port}"))
-        .expect("static SRT URL is valid");
+    let mut url =
+        url::Url::parse(&format!("srt://localhost:{port}")).expect("static SRT URL is valid");
     url.query_pairs_mut().append_pair("streamid", stream_id);
-    url.to_string()
+    Some(url.to_string())
 }
 
 pub async fn start_event_recording(
@@ -2265,6 +2437,9 @@ async fn start_product_recording(
     State(state): State<AppState>,
     Json(request): Json<StartRecordingRequest>,
 ) -> Response {
+    if let Err(response) = validate_media_input_url(&request.input_url, "inputUrl") {
+        return response;
+    }
     match state
         .recording_manager
         .start_recording(&request.stream_id, &request.input_url)
@@ -2313,19 +2488,81 @@ async fn upload_file(State(state): State<AppState>, mut multipart: Multipart) ->
     let mut name = None;
     let mut mime_type = "application/octet-stream".to_string();
     let mut labels = Vec::new();
-    let mut bytes = None;
-    while let Ok(Some(field)) = multipart.next_field().await {
+    let upload_id = Uuid::new_v4().to_string();
+    let temporary_path = state.restream.storage_path(&upload_id, "upload.part");
+    let mut total_bytes = 0u64;
+    let mut received_file = false;
+    loop {
+        let Some(mut field) = (match multipart.next_field().await {
+            Ok(field) => field,
+            Err(error) => {
+                let _ = tokio::fs::remove_file(&temporary_path).await;
+                return bad_request(format!("unable to read multipart upload: {error}"));
+            }
+        }) else {
+            break;
+        };
         let field_name = field.name().unwrap_or_default().to_string();
         if field_name == "file" {
+            if received_file {
+                return bad_request("only one file field is supported");
+            }
+            received_file = true;
             if let Some(content_type) = field.content_type() {
                 mime_type = content_type.to_string();
             }
             if name.is_none() {
                 name = field.file_name().map(ToOwned::to_owned);
             }
-            match field.bytes().await {
-                Ok(value) => bytes = Some(value),
-                Err(error) => return bad_request(format!("unable to read upload: {error}")),
+            if let Some(parent) = temporary_path.parent()
+                && let Err(io_error) = tokio::fs::create_dir_all(parent).await
+            {
+                return error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "storage_error",
+                    io_error.to_string(),
+                );
+            }
+            let mut file = match tokio::fs::File::create(&temporary_path).await {
+                Ok(file) => file,
+                Err(io_error) => {
+                    return error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "storage_error",
+                        io_error.to_string(),
+                    );
+                }
+            };
+            loop {
+                match field.chunk().await {
+                    Ok(Some(chunk)) => {
+                        total_bytes = total_bytes.saturating_add(chunk.len() as u64);
+                        if total_bytes > max_upload_bytes() {
+                            let _ = tokio::fs::remove_file(&temporary_path).await;
+                            return error(
+                                StatusCode::PAYLOAD_TOO_LARGE,
+                                "upload_too_large",
+                                format!(
+                                    "file exceeds the {} byte upload limit",
+                                    max_upload_bytes()
+                                ),
+                            );
+                        }
+                        if let Err(io_error) = file.write_all(&chunk).await {
+                            let _ = tokio::fs::remove_file(&temporary_path).await;
+                            return error(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                "storage_error",
+                                io_error.to_string(),
+                            );
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(error) => {
+                        let _ = tokio::fs::remove_file(&temporary_path).await;
+                        return bad_request(format!("unable to read upload: {error}"));
+                    }
+                }
             }
         } else if field_name == "name" {
             match field.text().await {
@@ -2345,37 +2582,29 @@ async fn upload_file(State(state): State<AppState>, mut multipart: Multipart) ->
     }
     let name = match name.filter(|value| !value.trim().is_empty()) {
         Some(value) => value,
-        None => return bad_request("multipart field `file` or `name` is required"),
+        None => {
+            let _ = tokio::fs::remove_file(&temporary_path).await;
+            return bad_request("multipart field `file` is required");
+        }
     };
-    let upload_id = Uuid::new_v4().to_string();
+    if !received_file {
+        return bad_request("multipart field `file` is required");
+    }
     let path = state.restream.storage_path(&upload_id, &name);
-    if let Some(bytes) = bytes {
-        if let Some(parent) = path.parent() {
-            if let Err(io_error) = tokio::fs::create_dir_all(parent).await {
-                return error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "storage_error",
-                    io_error.to_string(),
-                );
-            }
-        }
-        if let Err(io_error) = tokio::fs::write(&path, &bytes).await {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "storage_error",
-                io_error.to_string(),
-            );
-        }
+    if let Err(io_error) = tokio::fs::rename(&temporary_path, &path).await {
+        let _ = tokio::fs::remove_file(&temporary_path).await;
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "storage_error",
+            io_error.to_string(),
+        );
     }
     let file = state
         .restream
         .create_file_metadata(
             name,
             mime_type,
-            tokio::fs::metadata(&path)
-                .await
-                .map(|metadata| metadata.len())
-                .unwrap_or(0),
+            total_bytes,
             None,
             labels,
             path.to_string_lossy().into(),
@@ -2392,6 +2621,13 @@ async fn create_storage_metadata(
         Ok(value) => value,
         Err(response) => return response,
     };
+    if request.size_bytes.unwrap_or(0) > max_upload_bytes() {
+        return error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "upload_too_large",
+            format!("file exceeds the {} byte upload limit", max_upload_bytes()),
+        );
+    }
     let path = request.path.unwrap_or_default();
     if !path.is_empty() && !state.restream.is_managed_storage_path(&path) {
         return bad_request("path must point to an existing file inside the storage root");
@@ -2453,23 +2689,40 @@ async fn download_file(State(state): State<AppState>, Path(id): Path<String>) ->
             "file contents are not available in the local storage root",
         );
     }
-    match tokio::fs::read(&file.path).await {
-        Ok(bytes) => {
-            let mut headers = HeaderMap::new();
-            headers.insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_str(&file.mime_type)
-                    .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
-            );
-            if let Ok(value) =
-                HeaderValue::from_str(&format!("attachment; filename=\"{}\"", file.name))
-            {
-                headers.insert(header::CONTENT_DISPOSITION, value);
-            }
-            (StatusCode::OK, headers, bytes).into_response()
-        }
-        Err(_) => not_found("file contents"),
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(&file.mime_type)
+            .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+    );
+    if let Ok(value) = HeaderValue::from_str(&format!("attachment; filename=\"{}\"", file.name)) {
+        headers.insert(header::CONTENT_DISPOSITION, value);
     }
+    let path = file.path.clone();
+    let stream = async_stream::stream! {
+        let mut input = match tokio::fs::File::open(path).await {
+            Ok(input) => input,
+            Err(error) => {
+                yield Err::<bytes::Bytes, std::io::Error>(error);
+                return;
+            }
+        };
+        let mut buffer = vec![0u8; 64 * 1024];
+        loop {
+            let read = match input.read(&mut buffer).await {
+                Ok(read) => read,
+                Err(error) => {
+                    yield Err::<bytes::Bytes, std::io::Error>(error);
+                    return;
+                }
+            };
+            if read == 0 {
+                break;
+            }
+            yield Ok::<bytes::Bytes, std::io::Error>(bytes::Bytes::copy_from_slice(&buffer[..read]));
+        }
+    };
+    (StatusCode::OK, headers, Body::from_stream(stream)).into_response()
 }
 
 async fn file_download_url(State(state): State<AppState>, Path(id): Path<String>) -> Response {
@@ -3060,7 +3313,7 @@ async fn create_webhook(
     let Some(url) = request.url.as_deref() else {
         return bad_request("url is required");
     };
-    if let Err(response) = parse_url(url, "url") {
+    if let Err(response) = parse_http_url(url, "url") {
         return response;
     }
     let hook = state
@@ -3078,7 +3331,7 @@ async fn update_webhook(
     Json(request): Json<WebhookRequest>,
 ) -> Response {
     if let Some(ref url) = request.url {
-        if let Err(response) = parse_url(url, "url") {
+        if let Err(response) = parse_http_url(url, "url") {
             return response;
         }
     }
@@ -3119,12 +3372,21 @@ async fn test_webhook(State(state): State<AppState>, Path(id): Path<String>) -> 
         return not_found("webhook");
     };
     let payload = json!({"event": "webhook.test", "timestamp": now(), "data": {"healthy": true}});
-    match reqwest::Client::new()
-        .post(&hook.url)
-        .json(&payload)
-        .send()
-        .await
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
     {
+        Ok(client) => client,
+        Err(client_error) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "webhook_client",
+                client_error.to_string(),
+            );
+        }
+    };
+    match client.post(&hook.url).json(&payload).send().await {
         Ok(response) => ok(
             json!({"delivered": response.status().is_success(), "status": response.status().as_u16()}),
         ),

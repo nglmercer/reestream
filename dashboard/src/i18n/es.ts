@@ -10,6 +10,16 @@ export const es: Record<TranslationKey, string> = {
   'header.settings': 'Configuraci\u00f3n',
   'header.language': 'Idioma',
 
+  // Autenticación
+  'auth.title': 'Inicia sesión en Reestream',
+  'auth.description': 'Usa las credenciales de administrador configuradas para este servidor.',
+  'auth.email': 'Correo electrónico',
+  'auth.password': 'Contraseña',
+  'auth.signIn': 'Iniciar sesión',
+  'auth.signingIn': 'Iniciando sesión…',
+  'auth.invalidCredentials': 'Credenciales inválidas.',
+  'auth.signOut': 'Cerrar sesión',
+
   // Shell y dashboard rediseñado
   'nav.freePlan': 'Plan gratuito',
   'nav.invite': 'Invitar miembros',

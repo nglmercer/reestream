@@ -30,6 +30,26 @@ pub trait StreamRegistrar: Send + Sync {
 /// Trait for publishing stream data (implemented by DataBus)
 pub trait DataPublisher: Send + Sync {
     fn publish(&self, stream_id: &str, data: Bytes, is_video: bool, timestamp_ms: u32);
+
+    /// Claim a preview/recording data path for a stream. Implementations with
+    /// one global preview can reject concurrent inputs.
+    fn try_activate_stream(&self, _stream_id: &str) -> bool {
+        true
+    }
+
+    fn deactivate_stream(&self, _stream_id: &str) {}
+}
+
+/// Receives destination connection state so the product API can expose an
+/// honest status instead of leaving channels permanently disconnected.
+#[async_trait::async_trait]
+pub trait DestinationStatusReporter: Send + Sync {
+    async fn set_destination_status(
+        &self,
+        destination_id: &str,
+        status: &str,
+        last_error: Option<String>,
+    );
 }
 
 /// Resolves product-level event ingest keys to the destinations selected for
@@ -38,6 +58,10 @@ pub trait DataPublisher: Send + Sync {
 #[async_trait::async_trait]
 pub trait PublishKeyResolver: Send + Sync {
     async fn platforms_for_key(&self, stream_key: &str) -> Option<Vec<Platform>>;
+
+    async fn input_url_for_key(&self, _stream_key: &str) -> Option<String> {
+        None
+    }
 }
 
 fn is_video_sequence_header(data: &Bytes) -> bool {
@@ -46,6 +70,19 @@ fn is_video_sequence_header(data: &Bytes) -> bool {
 
 fn is_audio_sequence_header(data: &Bytes) -> bool {
     data.len() > 1 && (data[0] & 0xF0) == 0xA0 && data[1] == 0x00
+}
+
+async fn report_destination_status(
+    reporter: &Option<Arc<dyn DestinationStatusReporter>>,
+    destination_id: &str,
+    status: &str,
+    last_error: Option<String>,
+) {
+    if let Some(reporter) = reporter {
+        reporter
+            .set_destination_status(destination_id, status, last_error)
+            .await;
+    }
 }
 
 pub async fn perform_client_handshake(
@@ -99,6 +136,28 @@ pub async fn handle_publisher(
 }
 
 pub async fn handle_publisher_with_resolver(
+    inbound: TcpStream,
+    platforms: Arc<RwLock<Vec<Platform>>>,
+    stream_key_conf: String,
+    stream_manager: Option<Arc<dyn StreamRegistrar>>,
+    data_publisher: Option<Arc<dyn DataPublisher>>,
+    platform_events: tokio::sync::broadcast::Receiver<PlatformEvent>,
+    key_resolver: Option<Arc<dyn PublishKeyResolver>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    handle_publisher_with_resolver_and_status(
+        inbound,
+        platforms,
+        stream_key_conf,
+        stream_manager,
+        data_publisher,
+        platform_events,
+        key_resolver,
+        None,
+    )
+    .await
+}
+
+pub async fn handle_publisher_with_resolver_and_status(
     mut inbound: TcpStream,
     platforms: Arc<RwLock<Vec<Platform>>>,
     stream_key_conf: String,
@@ -106,6 +165,7 @@ pub async fn handle_publisher_with_resolver(
     data_publisher: Option<Arc<dyn DataPublisher>>,
     mut platform_events: tokio::sync::broadcast::Receiver<PlatformEvent>,
     key_resolver: Option<Arc<dyn PublishKeyResolver>>,
+    status_reporter: Option<Arc<dyn DestinationStatusReporter>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (mut server_session, leftover) = handshake_and_create_server_session(&mut inbound).await?;
     let (reconnect_tx, mut reconnect_rx) = mpsc::channel::<(usize, PushClient)>(10);
@@ -154,6 +214,13 @@ pub async fn handle_publisher_with_resolver(
                                 let pc = push_clients.remove(pos);
                                 info!("Platform {} disabled via toggle, shutting down PushClient", platform_id);
                                 pc.shutdown().await;
+                                report_destination_status(
+                                    &status_reporter,
+                                    &platform_id,
+                                    "disconnected",
+                                    None,
+                                )
+                                .await;
                             }
                         } else {
                             // Platform enabled: create a new PushClient if we don't already have one
@@ -170,10 +237,26 @@ pub async fn handle_publisher_with_resolver(
                                 };
                                 match timeout(Duration::from_secs(5), PushClient::connect_and_publish(&url_parsed, key, cached_video_header.clone(), cached_audio_header.clone(), cached_metadata.clone(), platform_id.clone())).await {
                                     Ok(Ok(pc)) => {
+                                        report_destination_status(
+                                            &status_reporter,
+                                            &platform_id,
+                                            "connected",
+                                            None,
+                                        )
+                                        .await;
                                         info!("Connected to newly enabled platform: {} (id={})", url, platform_id);
                                         push_clients.push(pc);
                                     },
-                                    _ => error!("Failed to connect to newly enabled platform: {}", url),
+                                    _ => {
+                                        report_destination_status(
+                                            &status_reporter,
+                                            &platform_id,
+                                            "error",
+                                            Some("destination connection failed".into()),
+                                        )
+                                        .await;
+                                        error!("Failed to connect to newly enabled platform: {}", url);
+                                    },
                                 }
                             }
                         }
@@ -193,10 +276,26 @@ pub async fn handle_publisher_with_resolver(
                             };
                             match timeout(Duration::from_secs(5), PushClient::connect_and_publish(&url_parsed, key, cached_video_header.clone(), cached_audio_header.clone(), cached_metadata.clone(), platform_id.clone())).await {
                                 Ok(Ok(pc)) => {
+                                    report_destination_status(
+                                        &status_reporter,
+                                        &platform_id,
+                                        "connected",
+                                        None,
+                                    )
+                                    .await;
                                     info!("Connected to new platform: {} (id={})", url, platform_id);
                                     push_clients.push(pc);
                                 },
-                                _ => error!("Failed to connect to new platform: {}", url),
+                                _ => {
+                                    report_destination_status(
+                                        &status_reporter,
+                                        &platform_id,
+                                        "error",
+                                        Some("destination connection failed".into()),
+                                    )
+                                    .await;
+                                    error!("Failed to connect to new platform: {}", url);
+                                },
                             }
                         }
                     }
@@ -206,6 +305,13 @@ pub async fn handle_publisher_with_resolver(
                             let pc = push_clients.remove(pos);
                             info!("Platform {} removed, shutting down PushClient", platform_id);
                             pc.shutdown().await;
+                            report_destination_status(
+                                &status_reporter,
+                                &platform_id,
+                                "disconnected",
+                                None,
+                            )
+                            .await;
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(_)) => continue,
@@ -221,10 +327,20 @@ pub async fn handle_publisher_with_resolver(
                         info!("Source stream ended (EOF). Shutting down push clients gracefully...");
                         // Unregister stream
                         if let (Some(registrar), Some(id)) = (&stream_manager, &registered_stream_id) {
+                            if let Some(pubber) = &data_publisher {
+                                pubber.deactivate_stream(id);
+                            }
                             registrar.unregister_stream(id).await;
                             info!("Unregistered stream: {}", id);
                         }
                         for (i, pc) in push_clients.iter().enumerate() {
+                            report_destination_status(
+                                &status_reporter,
+                                &pc.platform_id,
+                                "disconnected",
+                                None,
+                            )
+                            .await;
                             info!("Stopping client {}", i);
                             pc.shutdown().await;
                         }
@@ -253,7 +369,9 @@ pub async fn handle_publisher_with_resolver(
                                 }
                             }
                             ServerSessionEvent::PublishStreamRequested { request_id, stream_key, .. } => {
-                                let selected_platforms = if stream_key == stream_key_conf {
+                                let selected_platforms = if !stream_key_conf.is_empty()
+                                    && stream_key == stream_key_conf
+                                {
                                     Some(pls.clone())
                                 } else if let Some(ref resolver) = key_resolver {
                                     resolver.platforms_for_key(&stream_key).await
@@ -262,6 +380,37 @@ pub async fn handle_publisher_with_resolver(
                                 };
 
                                 if let Some(selected_platforms) = selected_platforms {
+                                    // Register the stream before accepting it so a
+                                    // single global preview cannot interleave two
+                                    // inputs and corrupt HLS/FLV state.
+                                    let mut next_stream_id = None;
+                                    if let Some(ref registrar) = stream_manager {
+                                        let stream_name = "RTMP Stream".to_string();
+                                        let input_url = if let Some(ref resolver) = key_resolver {
+                                            resolver
+                                                .input_url_for_key(&stream_key)
+                                                .await
+                                                .unwrap_or_else(|| {
+                                                    format!("rtmp://localhost/live/{stream_key}")
+                                                })
+                                        } else {
+                                            format!("rtmp://localhost/live/{stream_key}")
+                                        };
+                                        let id = registrar.register_stream(stream_name, input_url).await;
+                                        if let Some(ref pubber) = data_publisher
+                                            && !pubber.try_activate_stream(&id)
+                                        {
+                                            registrar.unregister_stream(&id).await;
+                                            let _ = server_session.reject_request(
+                                                request_id,
+                                                "NetStream.Publish.BadName",
+                                                "Another preview stream is already active",
+                                            );
+                                            continue;
+                                        }
+                                        next_stream_id = Some(id);
+                                    }
+
                                     if let Ok(out) = server_session.accept_request(request_id) {
                                         for r in out {
                                             if let ServerSessionResult::OutboundResponse(p) = r {
@@ -270,11 +419,7 @@ pub async fn handle_publisher_with_resolver(
                                         }
                                     }
 
-                                    // Register stream with StreamManager
-                                    if let Some(ref registrar) = stream_manager {
-                                        let stream_name = format!("RTMP Stream ({})", stream_key);
-                                        let input_url = format!("rtmp://localhost/live/{}", stream_key);
-                                        let id = registrar.register_stream(stream_name, input_url).await;
+                                    if let Some(id) = next_stream_id {
                                         registered_stream_id = Some(id.clone());
                                         info!("Registered stream: {}", id);
                                     }
@@ -284,10 +429,26 @@ pub async fn handle_publisher_with_resolver(
                                             let pid = platform_id_from(p.url.as_str(), &p.key);
                                             match timeout(Duration::from_secs(5), PushClient::connect_and_publish(&p.url, p.key.clone(), None, None, None, pid.clone())).await {
                                                 Ok(Ok(pc)) => {
+                                                    report_destination_status(
+                                                        &status_reporter,
+                                                        &pid,
+                                                        "connected",
+                                                        None,
+                                                    )
+                                                    .await;
                                                     info!("Connected to platform: {} (id={})", p.url, pid);
                                                     push_clients.push(pc);
                                                 },
-                                                _ => error!("Failed to connect to platform: {}", p.url),
+                                                _ => {
+                                                    report_destination_status(
+                                                        &status_reporter,
+                                                        &pid,
+                                                        "error",
+                                                        Some("destination connection failed".into()),
+                                                    )
+                                                    .await;
+                                                    error!("Failed to connect to platform: {}", p.url);
+                                                },
                                             }
                                         }
                                     }
@@ -304,7 +465,16 @@ pub async fn handle_publisher_with_resolver(
                                 if let (Some(pubber), Some(sid)) = (&data_publisher, &registered_stream_id) {
                                     pubber.publish(sid, data.clone(), true, timestamp.value);
                                 }
-                                forward_to_push_clients(&mut push_clients, &reconnect_tx, data, timestamp, true, platforms.clone()).await;
+                                forward_to_push_clients(
+                                    &mut push_clients,
+                                    &reconnect_tx,
+                                    data,
+                                    timestamp,
+                                    true,
+                                    platforms.clone(),
+                                    status_reporter.clone(),
+                                )
+                                .await;
                             }
                             ServerSessionEvent::AudioDataReceived { data, timestamp, .. } => {
                                 if is_audio_sequence_header(&data) {
@@ -314,7 +484,16 @@ pub async fn handle_publisher_with_resolver(
                                 if let (Some(pubber), Some(sid)) = (&data_publisher, &registered_stream_id) {
                                     pubber.publish(sid, data.clone(), false, timestamp.value);
                                 }
-                                forward_to_push_clients(&mut push_clients, &reconnect_tx, data, timestamp, false, platforms.clone()).await;
+                                forward_to_push_clients(
+                                    &mut push_clients,
+                                    &reconnect_tx,
+                                    data,
+                                    timestamp,
+                                    false,
+                                    platforms.clone(),
+                                    status_reporter.clone(),
+                                )
+                                .await;
                             }
                             ServerSessionEvent::StreamMetadataChanged { metadata, .. } => {
                                 cached_metadata = Some(metadata.clone());
@@ -347,6 +526,7 @@ async fn forward_to_push_clients(
     timestamp: RtmpTimestamp,
     is_video: bool,
     platforms: Arc<RwLock<Vec<Platform>>>,
+    status_reporter: Option<Arc<dyn DestinationStatusReporter>>,
 ) {
     for (i, pc) in push_clients.iter_mut().enumerate() {
         let mut state = pc.client_state.write().await;
@@ -363,6 +543,7 @@ async fn forward_to_push_clients(
             let p_platform_id = pc.platform_id.clone();
             let tx_back = reconnect_tx.clone();
             let platforms_clone = platforms.clone();
+            let status_reporter_clone = status_reporter.clone();
 
             let cached_vid = state.video_sequence_header.clone();
             let cached_aud = state.audio_sequence_header.clone();
@@ -392,6 +573,13 @@ async fn forward_to_push_clients(
                             platform_id_from(p.url.as_str(), &p.key) == p_platform_id && p.enabled
                         });
                         if !platform_still_enabled {
+                            report_destination_status(
+                                &status_reporter_clone,
+                                &p_platform_id,
+                                "disconnected",
+                                None,
+                            )
+                            .await;
                             info!(
                                 "Platform {} is no longer enabled, abandoning reconnection",
                                 p_platform_id
@@ -411,6 +599,13 @@ async fn forward_to_push_clients(
                     .await
                     {
                         Ok(new_pc) => {
+                            report_destination_status(
+                                &status_reporter_clone,
+                                &p_platform_id,
+                                "connected",
+                                None,
+                            )
+                            .await;
                             info!("Reconnection successful for platform index {}", i);
                             if tx_back.send((i, new_pc)).await.is_err() {
                                 warn!("Main loop closed, abandoning reconnection for {}", i);
@@ -418,6 +613,13 @@ async fn forward_to_push_clients(
                             break;
                         }
                         Err(e) => {
+                            report_destination_status(
+                                &status_reporter_clone,
+                                &p_platform_id,
+                                "error",
+                                Some("destination connection failed".into()),
+                            )
+                            .await;
                             warn!("Reconnection failed for platform {}: {}. Retrying...", i, e);
                         }
                     }

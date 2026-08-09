@@ -2,7 +2,8 @@ use axum::{
     Router,
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderValue, StatusCode},
+    middleware,
     response::IntoResponse,
     routing::{delete, get, post, put},
 };
@@ -10,7 +11,7 @@ use futures_util::{SinkExt, stream::StreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
 
 use crate::dashboard;
@@ -131,7 +132,7 @@ async fn add_stream(
         .stream_manager
         .add_stream(req.name, req.input_url)
         .await;
-    (StatusCode::CREATED, axum::Json(ApiResponse::ok(id)))
+    (StatusCode::CREATED, axum::Json(ApiResponse::ok(id))).into_response()
 }
 
 async fn remove_stream(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
@@ -230,32 +231,42 @@ async fn update_config(
         .map(|p| p as u16);
     let stream_key = req.get("stream_key").and_then(|v| v.as_str());
 
-    match reestream_core::setup::update_config_fields(
+    let config = match reestream_core::setup::update_config_fields(
         &state.config_path,
         rtmp_addr,
         rtmp_port,
         stream_key,
     ) {
-        Ok(config) => {
-            info!("Config updated via API");
-            axum::Json(ApiResponse::ok(serde_json::json!({
-                "rtmp_addr": config.rtmp_addr,
-                "rtmp_port": config.rtmp_port,
-                "platform_count": config.platform.as_ref().map_or(0, |p| p.len()),
-            })))
-            .into_response()
+        Ok(config) => config,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::Json(ApiResponse::<()>::err(format!("Config update failed: {e}"))),
+            )
+                .into_response();
         }
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            axum::Json(ApiResponse::<()>::err(format!("Config update failed: {e}"))),
-        )
-            .into_response(),
-    }
+    };
+    state
+        .restream
+        .set_runtime_stream_key(config.stream_key.clone())
+        .await;
+    info!("Config updated via API");
+    axum::Json(ApiResponse::ok(serde_json::json!({
+        "rtmp_addr": config.rtmp_addr,
+        "rtmp_port": config.rtmp_port,
+        "restart_required": true,
+        "platform_count": config.platform.as_ref().map_or(0, |p| p.len()),
+    })))
+    .into_response()
 }
 
 async fn reload_config() -> impl IntoResponse {
-    info!("Config reload requested via API");
-    axum::Json(ApiResponse::ok("config reload triggered"))
+    info!("Config reload requested via API; restart is required for listener changes");
+    axum::Json(ApiResponse::ok(serde_json::json!({
+        "reload": false,
+        "restart_required": true,
+        "message": "listener configuration changes require a process restart",
+    })))
 }
 
 async fn setup_status(State(state): State<AppState>) -> impl IntoResponse {
@@ -267,6 +278,15 @@ async fn setup_save(
     State(state): State<AppState>,
     axum::Json(req): axum::Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    if !reestream_core::setup::get_setup_status(&state.config_path).first_run {
+        return (
+            StatusCode::CONFLICT,
+            axum::Json(ApiResponse::<()>::err(
+                "initial setup is already complete; authenticate before changing configuration",
+            )),
+        )
+            .into_response();
+    }
     let setup_req: reestream_core::setup::SetupRequest = match serde_json::from_value(req) {
         Ok(r) => r,
         Err(e) => {
@@ -278,24 +298,29 @@ async fn setup_save(
         }
     };
 
-    match reestream_core::setup::apply_setup(&state.config_path, &setup_req) {
-        Ok(config) => {
-            info!("Configuration saved via setup wizard");
-            (
-                StatusCode::OK,
-                axum::Json(ApiResponse::ok(format!(
-                    "Config saved with {} platforms",
-                    config.platform.as_ref().map_or(0, |p| p.len())
-                ))),
+    let config = match reestream_core::setup::apply_setup(&state.config_path, &setup_req) {
+        Ok(config) => config,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::Json(ApiResponse::<()>::err(format!("Setup failed: {e}"))),
             )
-                .into_response()
+                .into_response();
         }
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            axum::Json(ApiResponse::<()>::err(format!("Setup failed: {e}"))),
-        )
-            .into_response(),
-    }
+    };
+    state
+        .restream
+        .set_runtime_stream_key(config.stream_key.clone())
+        .await;
+    info!("Configuration saved via setup wizard");
+    (
+        StatusCode::OK,
+        axum::Json(ApiResponse::ok(format!(
+            "Config saved with {} platforms",
+            config.platform.as_ref().map_or(0, |p| p.len())
+        ))),
+    )
+        .into_response()
 }
 
 async fn server_info(State(state): State<AppState>) -> impl IntoResponse {
@@ -325,17 +350,19 @@ async fn reveal_stream_key(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 async fn reset_stream_key(State(state): State<AppState>) -> impl IntoResponse {
-    match reestream_core::setup::reset_stream_key(&state.config_path) {
-        Ok(new_key) => {
-            info!("Stream key reset via API");
-            axum::Json(ApiResponse::ok(new_key)).into_response()
+    let new_key = match reestream_core::setup::reset_stream_key(&state.config_path) {
+        Ok(new_key) => new_key,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(ApiResponse::<()>::err(format!("Failed to reset key: {e}"))),
+            )
+                .into_response();
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            axum::Json(ApiResponse::<()>::err(format!("Failed to reset key: {e}"))),
-        )
-            .into_response(),
-    }
+    };
+    state.restream.set_runtime_stream_key(new_key.clone()).await;
+    info!("Stream key reset via API");
+    axum::Json(ApiResponse::ok(new_key)).into_response()
 }
 
 async fn list_platforms(State(state): State<AppState>) -> impl IntoResponse {
@@ -347,6 +374,16 @@ async fn add_platform(
     State(state): State<AppState>,
     axum::Json(req): axum::Json<AddPlatformRequest>,
 ) -> impl IntoResponse {
+    if req.name.trim().is_empty() || req.key.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(ApiResponse::<()>::err("platform name and key are required")),
+        )
+            .into_response();
+    }
+    if let Err(response) = crate::api_v1::parse_destination_url(&req.url, "url") {
+        return response;
+    }
     // Add to runtime
     let id = state
         .stream_manager
@@ -365,7 +402,7 @@ async fn add_platform(
         info!("Platform added and synced to config.toml");
     }
 
-    (StatusCode::CREATED, axum::Json(ApiResponse::ok(id)))
+    (StatusCode::CREATED, axum::Json(ApiResponse::ok(id))).into_response()
 }
 
 async fn remove_platform(
@@ -439,6 +476,22 @@ async fn update_platform(
     Path(id): Path<String>,
     axum::Json(req): axum::Json<UpdatePlatformRequest>,
 ) -> impl IntoResponse {
+    if let Some(url) = req.url.as_deref()
+        && let Err(response) = crate::api_v1::parse_destination_url(url, "url")
+    {
+        return response;
+    }
+    if req
+        .key
+        .as_deref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(ApiResponse::<()>::err("platform key cannot be empty")),
+        )
+            .into_response();
+    }
     // Find platform index in config
     let platforms = state.stream_manager.get_platforms().await;
     let platform_index = platforms.iter().position(|p| p.id == id);
@@ -495,11 +548,18 @@ async fn start_recording(
     let input_url = req
         .get("input_url")
         .and_then(|v| v.as_str())
-        .unwrap_or("rtmp://0.0.0.0:1935/live");
+        .map(ToOwned::to_owned);
+    let input_url = match input_url {
+        Some(input_url) => input_url,
+        None => state.restream.runtime_ingest_url().await,
+    };
+    if let Err(response) = crate::api_v1::validate_media_input_url(&input_url, "input_url") {
+        return response;
+    }
 
     match state
         .recording_manager
-        .start_recording(stream_id, input_url)
+        .start_recording(stream_id, &input_url)
         .await
     {
         Ok(id) => {
@@ -574,6 +634,16 @@ async fn hls_segment(
     State(state): State<AppState>,
     Path(filename): Path<String>,
 ) -> impl IntoResponse {
+    if filename.is_empty()
+        || filename
+            != std::path::Path::new(&filename)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+        || !filename.ends_with(".ts")
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     // Try ffmpeg-generated segments first
     let segment_dir = &state.hls_segmenter.config().segment_dir;
     let path = segment_dir.join(&filename);
@@ -664,11 +734,13 @@ async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
         };
         metrics.push_str(&format!(
             "reestream_stream_status{{id=\"{}\",name=\"{}\"}} {status}\n",
-            stream.id, stream.name
+            prometheus_escape(&stream.id),
+            prometheus_escape(&stream.name)
         ));
         metrics.push_str(&format!(
             "reestream_stream_bitrate_kbps{{id=\"{}\"}} {}\n",
-            stream.id, stream.bitrate
+            prometheus_escape(&stream.id),
+            stream.bitrate
         ));
     }
 
@@ -679,24 +751,21 @@ async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
     )
 }
 
+fn prometheus_escape(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\n', "\\n")
+        .replace('"', "\\\"")
+}
+
 pub fn create_router(state: AppState) -> Router {
-    Router::new()
-        .route("/health", get(health))
-        .route("/", get(dashboard::serve_index))
-        .route("/dashboard", get(dashboard::serve_index))
-        .route("/setup", get(dashboard::serve_index))
-        .route("/assets/{*path}", get(dashboard::serve_assets))
-        .route("/favicon.svg", get(dashboard::serve_favicon))
-        .route("/{*path}", get(dashboard::serve_static))
+    let protected_legacy = Router::new()
         .route("/ws/streams", get(ws_streams))
-        .route("/api/status", get(status))
         .route("/api/streams", get(list_streams).post(add_stream))
         .route("/api/streams/{id}", delete(remove_stream))
         .route("/api/streams/{id}/stats", get(stream_stats))
         .route("/api/config", get(get_config).put(update_config))
         .route("/api/config/reload", post(reload_config))
-        .route("/api/setup/status", get(setup_status))
-        .route("/api/setup/save", post(setup_save))
         .route("/api/setup/info", get(server_info))
         .route(
             "/api/setup/key",
@@ -712,12 +781,43 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/recordings/start", post(start_recording))
         .route("/api/recordings/{id}/stop", post(stop_recording))
         .route("/api/recordings/{id}", delete(delete_recording))
+        .route("/metrics", get(metrics))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::api_v1::require_auth,
+        ));
+
+    let cors = match std::env::var("RESTREAM_CORS_ORIGIN") {
+        Ok(origin) if !origin.trim().is_empty() => match origin.parse::<HeaderValue>() {
+            Ok(origin) => CorsLayer::new()
+                .allow_origin(origin)
+                .allow_methods(Any)
+                .allow_headers(Any),
+            Err(error) => {
+                warn!(%error, "invalid RESTREAM_CORS_ORIGIN; CORS disabled");
+                CorsLayer::new()
+            }
+        },
+        _ => CorsLayer::new(),
+    };
+
+    Router::new()
+        .route("/health", get(health))
+        .route("/", get(dashboard::serve_index))
+        .route("/dashboard", get(dashboard::serve_index))
+        .route("/setup", get(dashboard::serve_index))
+        .route("/assets/{*path}", get(dashboard::serve_assets))
+        .route("/favicon.svg", get(dashboard::serve_favicon))
+        .route("/{*path}", get(dashboard::serve_static))
+        .route("/api/status", get(status))
+        .route("/api/setup/status", get(setup_status))
+        .route("/api/setup/save", post(setup_save))
         .route("/stream.m3u8", get(hls_playlist))
         .route("/hls/{filename}", get(hls_segment))
         .route("/stream.flv", get(flv_stream))
-        .route("/metrics", get(metrics))
+        .merge(protected_legacy)
         .merge(crate::api_v1::routes(state.clone()))
-        .layer(CorsLayer::permissive())
+        .layer(cors)
         .with_state(state)
 }
 

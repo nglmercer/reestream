@@ -6,7 +6,10 @@
 //! events, chat, analytics, and assets.  This store is the small local
 //! control-plane database for those resources.
 
-use aes_gcm::{Aes256Gcm, Nonce, aead::{Aead, KeyInit}};
+use aes_gcm::{
+    Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit},
+};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -89,6 +92,12 @@ pub fn is_valid_scheduled_for(value: &str) -> bool {
 
 fn id() -> String {
     Uuid::new_v4().to_string()
+}
+
+fn ffmpeg_command() -> PathBuf {
+    std::env::var_os("RESTREAM_FFMPEG_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("ffmpeg"))
 }
 
 fn default_true() -> bool {
@@ -735,6 +744,29 @@ struct SensitiveState {
     webhook_secrets: HashMap<String, String>,
 }
 
+fn sensitive_state(data: &RestreamData) -> SensitiveState {
+    SensitiveState {
+        channel_secrets: data.channel_secrets.clone(),
+        event_stream_keys: data.event_stream_keys.clone(),
+        oauth_connections: data.oauth_connections.clone(),
+        webhook_secrets: data
+            .webhooks
+            .iter()
+            .filter_map(|webhook| {
+                webhook
+                    .secret
+                    .as_ref()
+                    .map(|secret| (webhook.id.clone(), secret.clone()))
+            })
+            .collect(),
+    }
+}
+
+fn encrypted_sensitive_state(data: &RestreamData, key: &[u8; 32]) -> Option<Vec<u8>> {
+    let encoded = serde_json::to_vec(&sensitive_state(data)).ok()?;
+    encrypt_sensitive_state(key, &encoded).ok()
+}
+
 fn decode_hex_key(value: &str) -> Option<[u8; 32]> {
     let value = value.trim();
     if value.len() != 64 {
@@ -899,11 +931,7 @@ fn atomic_write(path: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()> {
     result
 }
 
-fn write_state_files(
-    path: &Path,
-    public: &[u8],
-    sensitive: Option<&[u8]>,
-) -> std::io::Result<()> {
+fn write_state_files(path: &Path, public: &[u8], sensitive: Option<&[u8]>) -> std::io::Result<()> {
     atomic_write(path, public, 0o600)?;
     if let Some(sensitive) = sensitive {
         atomic_write(&path.with_extension("secrets"), sensitive, 0o600)?;
@@ -919,7 +947,7 @@ pub struct RestreamStore {
     storage_root: Arc<PathBuf>,
     persist_lock: Arc<Mutex<()>>,
     recording_sessions: Arc<RwLock<HashMap<String, String>>>,
-    oauth_states: Arc<RwLock<HashMap<String, (String, String, u64)>>>,
+    oauth_states: Arc<RwLock<HashMap<String, (String, String, u64, String)>>>,
     login_throttle: Arc<Mutex<HashMap<String, LoginThrottle>>>,
     auth: Arc<AuthConfig>,
     runtime_config: Arc<RwLock<RuntimeIngestConfig>>,
@@ -991,20 +1019,23 @@ impl RestreamStore {
             .as_ref()
             .and_then(|path| load_or_create_state_key(path));
         let (mut data, legacy_sensitive) = load_state(state_path.as_deref());
+        let mut migrated_legacy = false;
         if let (Some(path), Some(key)) = (state_path.as_deref(), state_key.as_deref()) {
             if let Some(sensitive) = load_sensitive_state(path, key) {
                 apply_sensitive_state(&mut data, sensitive);
             } else if let Some(legacy_sensitive) = legacy_sensitive {
                 warn!(path = %path.display(), "migrating plaintext state secrets to encrypted storage");
                 apply_sensitive_state(&mut data, legacy_sensitive);
+                migrated_legacy = true;
             }
         } else if let Some(legacy_sensitive) = legacy_sensitive {
             apply_sensitive_state(&mut data, legacy_sensitive);
         }
+        let migration_snapshot = migrated_legacy.then(|| data.clone());
         let (event_tx, _) = broadcast::channel(512);
         let (chat_tx, _) = broadcast::channel(512);
         let (platform_event_tx, _) = broadcast::channel(256);
-        Self {
+        let store = Self {
             data: Arc::new(RwLock::new(data)),
             state_path,
             state_key,
@@ -1021,7 +1052,25 @@ impl RestreamStore {
             event_tx,
             chat_tx,
             platform_event_tx,
+        };
+        if let (Some(snapshot), Some(path), Some(key)) = (
+            migration_snapshot,
+            store.state_path.as_ref(),
+            store.state_key.as_deref(),
+        ) {
+            match serde_json::to_vec_pretty(&snapshot)
+                .ok()
+                .zip(encrypted_sensitive_state(&snapshot, key))
+            {
+                Some((public, sensitive)) => {
+                    if let Err(error) = write_state_files(path, &public, Some(&sensitive)) {
+                        warn!(%error, "failed to finish plaintext state migration")
+                    }
+                }
+                None => warn!("failed to encode migrated Reestream state"),
+            }
         }
+        store
     }
 
     async fn persist(&self, data: &RestreamData) {
@@ -1035,25 +1084,10 @@ impl RestreamStore {
                 return;
             }
         };
-        let sensitive = self.state_key.as_deref().and_then(|key| {
-            let state = SensitiveState {
-                channel_secrets: data.channel_secrets.clone(),
-                event_stream_keys: data.event_stream_keys.clone(),
-                oauth_connections: data.oauth_connections.clone(),
-                webhook_secrets: data
-                    .webhooks
-                    .iter()
-                    .filter_map(|webhook| {
-                        webhook
-                            .secret
-                            .as_ref()
-                            .map(|secret| (webhook.id.clone(), secret.clone()))
-                    })
-                    .collect(),
-            };
-            let encoded = serde_json::to_vec(&state).ok()?;
-            encrypt_sensitive_state(key, &encoded).ok()
-        });
+        let sensitive = self
+            .state_key
+            .as_deref()
+            .and_then(|key| encrypted_sensitive_state(data, key));
         let path = path.clone();
         let result = tokio::task::spawn_blocking(move || {
             write_state_files(&path, &public, sensitive.as_deref())
@@ -1097,8 +1131,47 @@ impl RestreamStore {
         self.runtime_config.read().await.stream_key.clone()
     }
 
+    pub async fn accepts_stream_key(&self, stream_key: &str) -> bool {
+        if stream_key.is_empty() {
+            return false;
+        }
+        if self.runtime_stream_key().await == stream_key {
+            return true;
+        }
+        self.data
+            .read()
+            .await
+            .event_stream_keys
+            .values()
+            .any(|key| key == stream_key)
+    }
+
     pub async fn set_runtime_stream_key(&self, stream_key: impl Into<String>) {
         self.runtime_config.write().await.stream_key = stream_key.into();
+    }
+
+    pub async fn set_channel_status(
+        &self,
+        destination_id: &str,
+        status: impl Into<String>,
+        last_error: Option<String>,
+    ) {
+        let status = status.into();
+        self.mutate(|data| {
+            let secrets = data.channel_secrets.clone();
+            for channel in &mut data.channels {
+                let stream_key = secrets
+                    .get(&channel.id)
+                    .map(|secret| secret.stream_key.as_str())
+                    .unwrap_or(channel.stream_key.as_str());
+                if platform_id_from(&channel.stream_url, stream_key) == destination_id {
+                    channel.status = status.clone();
+                    channel.last_error = last_error.clone();
+                    channel.updated_at = now();
+                }
+            }
+        })
+        .await;
     }
 
     pub async fn set_runtime_ingest_config(
@@ -1161,9 +1234,11 @@ impl RestreamStore {
             }
         }
 
-        let valid = self.auth.password.as_deref().is_some_and(|configured| {
-            email == self.auth.email && password == configured
-        });
+        let valid = self
+            .auth
+            .password
+            .as_deref()
+            .is_some_and(|configured| email == self.auth.email && password == configured);
         if !valid {
             let mut throttles = self.login_throttle.lock().await;
             let throttle = throttles.entry(throttle_key).or_default();
@@ -1307,10 +1382,21 @@ impl RestreamStore {
         .await
     }
 
-    pub async fn save_oauth_state(&self, state: String, platform_id: String, redirect_uri: String) {
+    pub async fn save_oauth_state(
+        &self,
+        state: String,
+        platform_id: String,
+        redirect_uri: String,
+        owner_token: String,
+    ) {
         self.oauth_states.write().await.insert(
             state,
-            (platform_id, redirect_uri, now().saturating_add(600)),
+            (
+                platform_id,
+                redirect_uri,
+                now().saturating_add(600),
+                owner_token,
+            ),
         );
     }
 
@@ -1319,13 +1405,17 @@ impl RestreamStore {
         state: &str,
         platform_id: &str,
         redirect_uri: &str,
+        owner_token: &str,
     ) -> bool {
-        let Some((stored_platform, stored_redirect, expires_at)) =
+        let Some((stored_platform, stored_redirect, expires_at, stored_owner)) =
             self.oauth_states.write().await.remove(state)
         else {
             return false;
         };
-        stored_platform == platform_id && stored_redirect == redirect_uri && expires_at > now()
+        stored_platform == platform_id
+            && stored_redirect == redirect_uri
+            && stored_owner == owner_token
+            && expires_at > now()
     }
 
     pub async fn list_channels(&self) -> Vec<Channel> {
@@ -2380,7 +2470,7 @@ impl RestreamStore {
                         store.mark_clip_failed(&clip_id).await;
                         return;
                     }
-                    let succeeded = tokio::process::Command::new("ffmpeg")
+                    let succeeded = tokio::process::Command::new(ffmpeg_command())
                         .args([
                             "-y",
                             "-ss",
@@ -2931,18 +3021,40 @@ impl RestreamStore {
                 Some(format!("sha256={encoded}"))
             });
             tokio::spawn(async move {
-                let mut request = reqwest::Client::new()
-                    .post(&webhook.url)
-                    .header("x-reestream-event", &event_name)
-                    .header("x-reestream-event-id", &event_id)
-                    .header("content-type", "application/json")
-                    .body(body_bytes);
-                if let Some(signature) = signature {
-                    request = request.header("x-reestream-signature", signature);
-                }
-                let request = request.send().await;
-                if let Err(error) = request {
-                    warn!(webhook_id = %webhook.id, %error, "webhook delivery failed");
+                let client = match reqwest::Client::builder()
+                    .timeout(Duration::from_secs(10))
+                    .redirect(reqwest::redirect::Policy::none())
+                    .build()
+                {
+                    Ok(client) => client,
+                    Err(error) => {
+                        warn!(webhook_id = %webhook.id, %error, "webhook client creation failed");
+                        return;
+                    }
+                };
+                for attempt in 0..3 {
+                    let mut request = client
+                        .post(&webhook.url)
+                        .header("x-reestream-event", &event_name)
+                        .header("x-reestream-event-id", &event_id)
+                        .header("content-type", "application/json")
+                        .body(body_bytes.clone());
+                    if let Some(signature) = signature.as_deref() {
+                        request = request.header("x-reestream-signature", signature);
+                    }
+                    match request.send().await {
+                        Ok(response) if response.status().is_success() => return,
+                        Ok(response) => {
+                            if attempt == 2 {
+                                warn!(webhook_id = %webhook.id, status = %response.status(), "webhook delivery returned an error");
+                            }
+                        }
+                        Err(error) if attempt == 2 => {
+                            warn!(webhook_id = %webhook.id, %error, "webhook delivery failed");
+                        }
+                        Err(_) => {}
+                    }
+                    tokio::time::sleep(Duration::from_millis(250 * (attempt + 1))).await;
                 }
             });
         }
@@ -2961,7 +3073,12 @@ impl reestream_core::client::PublishKeyResolver for RestreamStore {
                 Some(platforms) => platforms.read().await.clone(),
                 None => Vec::new(),
             };
-            return Some(platforms.into_iter().filter(|platform| platform.enabled).collect());
+            return Some(
+                platforms
+                    .into_iter()
+                    .filter(|platform| platform.enabled)
+                    .collect(),
+            );
         }
         let data = self.data.read().await;
         let event_id = data
@@ -2989,6 +3106,27 @@ impl reestream_core::client::PublishKeyResolver for RestreamStore {
             });
         }
         Some(platforms)
+    }
+
+    async fn input_url_for_key(&self, stream_key: &str) -> Option<String> {
+        Some(format!(
+            "{}/{}",
+            self.runtime_ingest_url().await.trim_end_matches('/'),
+            stream_key
+        ))
+    }
+}
+
+#[async_trait::async_trait]
+impl reestream_core::client::DestinationStatusReporter for RestreamStore {
+    async fn set_destination_status(
+        &self,
+        destination_id: &str,
+        status: &str,
+        last_error: Option<String>,
+    ) {
+        self.set_channel_status(destination_id, status, last_error)
+            .await;
     }
 }
 

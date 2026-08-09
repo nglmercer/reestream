@@ -20,7 +20,7 @@ interface UseStreamWsOptions {
 }
 
 /** Subscribe to the versioned event stream and reconcile live events in the UI. */
-export function useStreamWs(opts: UseStreamWsOptions) {
+export function useStreamWs(opts: UseStreamWsOptions, enabled = true) {
   const [connected, setConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -29,6 +29,16 @@ export function useStreamWs(opts: UseStreamWsOptions) {
 
   useEffect(() => {
     let destroyed = false;
+
+    if (!enabled) {
+      setConnected(false);
+      return () => {
+        destroyed = true;
+        if (reconnectRef.current) clearTimeout(reconnectRef.current);
+        wsRef.current?.close();
+        wsRef.current = null;
+      };
+    }
 
     function connect() {
       if (destroyed) return;
@@ -74,7 +84,7 @@ export function useStreamWs(opts: UseStreamWsOptions) {
       if (reconnectRef.current) clearTimeout(reconnectRef.current);
       wsRef.current?.close();
     };
-  }, []);
+  }, [enabled]);
 
   return { connected };
 }

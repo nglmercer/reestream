@@ -18,6 +18,7 @@ export type IconName =
   | 'home'
   | 'layers'
   | 'link'
+  | 'logout'
   | 'monitor'
   | 'more'
   | 'pause'
@@ -84,6 +85,8 @@ function shape(name: IconName): JSX.Element {
       return <><path {...common} d="m12 3 9 5-9 5-9-5 9-5Z" /><path {...common} d="m3 12 9 5 9-5M3 16l9 5 9-5" /></>;
     case 'link':
       return <><path {...common} d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1" /><path {...common} d="M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 12 20l1.1-1.1" /></>;
+    case 'logout':
+      return <><path {...common} d="M10 5H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4" /><path {...common} d="m14 8 4 4-4 4M9 12h9" /></>;
     case 'monitor':
       return <><rect {...common} x="3" y="4" width="18" height="13" rx="2" /><path {...common} d="M8 21h8M12 17v4" /></>;
     case 'more':

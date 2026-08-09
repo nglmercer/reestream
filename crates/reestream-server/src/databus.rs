@@ -1,8 +1,10 @@
 use bytes::Bytes;
+use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::broadcast;
 
 pub struct DataBus {
     tx: broadcast::Sender<DataPacket>,
+    active_stream: Arc<StdRwLock<Option<String>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -16,7 +18,10 @@ pub struct DataPacket {
 impl DataBus {
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(1024);
-        Self { tx }
+        Self {
+            tx,
+            active_stream: Arc::new(StdRwLock::new(None)),
+        }
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<DataPacket> {
@@ -38,18 +43,49 @@ impl Clone for DataBus {
     fn clone(&self) -> Self {
         Self {
             tx: self.tx.clone(),
+            active_stream: self.active_stream.clone(),
         }
     }
 }
 
 impl reestream_core::client::DataPublisher for DataBus {
     fn publish(&self, stream_id: &str, data: Bytes, is_video: bool, timestamp_ms: u32) {
+        if self
+            .active_stream
+            .read()
+            .ok()
+            .and_then(|active| active.clone())
+            .is_some_and(|active| active != stream_id)
+        {
+            return;
+        }
         self.send(DataPacket {
             stream_id: stream_id.to_string(),
             data,
             is_video,
             timestamp_ms,
         });
+    }
+
+    fn try_activate_stream(&self, stream_id: &str) -> bool {
+        let Ok(mut active) = self.active_stream.write() else {
+            return false;
+        };
+        match active.as_deref() {
+            Some(current) => current == stream_id,
+            None => {
+                *active = Some(stream_id.to_string());
+                true
+            }
+        }
+    }
+
+    fn deactivate_stream(&self, stream_id: &str) {
+        if let Ok(mut active) = self.active_stream.write()
+            && active.as_deref() == Some(stream_id)
+        {
+            *active = None;
+        }
     }
 }
 

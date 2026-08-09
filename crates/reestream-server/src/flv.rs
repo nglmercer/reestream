@@ -53,6 +53,12 @@ impl FlvState {
         self.segments.read().await.clone()
     }
 
+    pub async fn clear(&self) {
+        self.segments.write().await.clear();
+        *self.video_header.write().await = None;
+        *self.audio_header.write().await = None;
+    }
+
     pub async fn subscribe_with_recent(&self) -> (Vec<Bytes>, broadcast::Receiver<Bytes>) {
         let mut recent = Vec::new();
 

@@ -61,13 +61,13 @@ pub fn run_cli_wizard(config_path: &Path) -> Result<Config, Box<dyn std::error::
     }
 
     let toml_content = config.to_toml()?;
-    std::fs::write(config_path, &toml_content)?;
+    write_config_file(config_path, &toml_content)?;
 
     println!();
     println!("✓ Configuration saved to {}", config_path.display());
     println!();
     println!("  RTMP: {}:{}", config.rtmp_addr, config.rtmp_port);
-    println!("  Key:  {}", config.stream_key);
+    println!("  Key:  configured (value hidden)");
     println!(
         "  Platforms: {}",
         config.platform.as_ref().map_or(0, |p| p.len())
@@ -216,13 +216,20 @@ pub struct ServerInfo {
 pub fn get_server_info(config_path: &Path) -> Result<ServerInfo, Box<dyn std::error::Error>> {
     let config = Config::from_file(config_path)?;
 
-    let hostname = std::env::var("HOSTNAME")
+    let hostname = std::env::var("RESTREAM_PUBLIC_HOST")
+        .or_else(|_| std::env::var("HOSTNAME"))
         .or_else(|_| std::env::var("COMPUTERNAME"))
         .unwrap_or_else(|_| "localhost".to_string());
 
     let rtmp_port = config.rtmp_port;
-    let http_port = 8080;
-    let srt_port = 3000;
+    let http_port = std::env::var("RESTREAM_HTTP_PORT")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(8080);
+    let srt_port = std::env::var("RESTREAM_SRT_PORT")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(3000);
 
     let key = &config.stream_key;
     let masked = if key.len() <= 4 {
@@ -233,7 +240,13 @@ pub fn get_server_info(config_path: &Path) -> Result<ServerInfo, Box<dyn std::er
 
     let rtmp_url = format!("rtmp://{hostname}:{rtmp_port}");
     let rtmps_url = Some(format!("rtmps://{hostname}:{rtmp_port}"));
-    let srt_url = Some(format!("srt://{hostname}:{srt_port}"));
+    let srt_url = (std::env::var("RESTREAM_SRT_ENABLED")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+        && std::env::var("RESTREAM_SRT_PASSPHRASE")
+            .ok()
+            .is_some_and(|value| !value.trim().is_empty()))
+    .then(|| format!("srt://{hostname}:{srt_port}"));
     let http_url = format!("http://{hostname}:{http_port}");
 
     Ok(ServerInfo {
@@ -266,7 +279,7 @@ pub fn reset_stream_key(config_path: &Path) -> Result<String, Box<dyn std::error
     config.stream_key = new_key.clone();
 
     let toml_content = config.to_toml()?;
-    std::fs::write(config_path, toml_content)?;
+    write_config_file(config_path, &toml_content)?;
 
     Ok(new_key)
 }
@@ -276,8 +289,9 @@ pub fn read_config(config_path: &Path) -> Result<Config, Box<dyn std::error::Err
 }
 
 pub fn save_config(config_path: &Path, config: &Config) -> Result<(), Box<dyn std::error::Error>> {
+    config.validate()?;
     let toml_content = config.to_toml()?;
-    std::fs::write(config_path, toml_content)?;
+    write_config_file(config_path, &toml_content)?;
     Ok(())
 }
 
@@ -299,8 +313,9 @@ pub fn update_config_fields(
         config.stream_key = key.to_string();
     }
 
+    config.validate()?;
     let toml_content = config.to_toml()?;
-    std::fs::write(config_path, toml_content)?;
+    write_config_file(config_path, &toml_content)?;
 
     Ok(config)
 }
@@ -326,8 +341,12 @@ pub fn add_platform_to_config(
         orientation: orient,
     });
 
+    if key.trim().is_empty() {
+        return Err("platform key cannot be empty".into());
+    }
+    config.validate()?;
     let toml_content = config.to_toml()?;
-    std::fs::write(config_path, toml_content)?;
+    write_config_file(config_path, &toml_content)?;
     Ok(())
 }
 
@@ -363,8 +382,9 @@ pub fn update_platform_in_config(
         };
     }
 
+    config.validate()?;
     let toml_content = config.to_toml()?;
-    std::fs::write(config_path, toml_content)?;
+    write_config_file(config_path, &toml_content)?;
     Ok(true)
 }
 
@@ -385,9 +405,40 @@ pub fn remove_platform_from_config(
 
     platforms.remove(index);
 
+    config.validate()?;
     let toml_content = config.to_toml()?;
-    std::fs::write(config_path, toml_content)?;
+    write_config_file(config_path, &toml_content)?;
     Ok(true)
+}
+
+fn write_config_file(path: &Path, contents: &str) -> io::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("config.toml");
+    let temporary = parent.join(format!(".{file_name}.{}.tmp", uuid::Uuid::new_v4()));
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(contents.as_bytes())?;
+        file.sync_all()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = file.metadata()?.permissions();
+            permissions.set_mode(0o600);
+            std::fs::set_permissions(&temporary, permissions)?;
+        }
+        std::fs::rename(&temporary, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
 }
 
 #[cfg(test)]

@@ -17,6 +17,7 @@ export interface DashboardStatus {
   uptimeSeconds: number;
   activeStreams: number;
   totalViewers: number;
+  authRequired: boolean;
 }
 
 export interface SetupStatus {
@@ -298,19 +299,50 @@ export class ReestreamApiError extends Error {
 }
 
 export class ReestreamApiV1 {
+  private static readonly ACCESS_TOKEN_KEY = 'reestream.accessToken';
+  private static readonly REFRESH_TOKEN_KEY = 'reestream.refreshToken';
   private readonly baseUrl: string;
   private accessToken: string | null;
+  private refreshToken: string | null;
+  private refreshPromise: Promise<AuthTokens> | null = null;
 
   constructor(baseUrl = '/api/v1', accessToken: string | null = null) {
     this.baseUrl = baseUrl.replace(/\/$/, '');
-    this.accessToken = accessToken;
+    this.accessToken = accessToken ?? this.readStoredToken(ReestreamApiV1.ACCESS_TOKEN_KEY);
+    this.refreshToken = this.readStoredToken(ReestreamApiV1.REFRESH_TOKEN_KEY);
   }
 
   setAccessToken(token: string | null): void {
     this.accessToken = token;
+    if (token === null) {
+      this.refreshToken = null;
+      this.clearStoredTokens();
+    } else {
+      this.storeToken(ReestreamApiV1.ACCESS_TOKEN_KEY, token);
+    }
   }
 
-  async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  setTokens(tokens: AuthTokens): void {
+    this.accessToken = tokens.accessToken;
+    this.refreshToken = tokens.refreshToken;
+    this.storeToken(ReestreamApiV1.ACCESS_TOKEN_KEY, tokens.accessToken);
+    this.storeToken(ReestreamApiV1.REFRESH_TOKEN_KEY, tokens.refreshToken);
+  }
+
+  clearTokens(): void {
+    this.accessToken = null;
+    this.refreshToken = null;
+    this.clearStoredTokens();
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('reestream-auth-expired'));
+    }
+  }
+
+  isAuthenticated(): boolean {
+    return this.accessToken !== null;
+  }
+
+  async request<T>(path: string, init: RequestInit = {}, retryAfterRefresh = true): Promise<T> {
     const headers = new Headers(init.headers);
     if (init.body && !(init.body instanceof FormData)) {
       headers.set('Content-Type', 'application/json');
@@ -319,12 +351,26 @@ export class ReestreamApiV1 {
       headers.set('Authorization', `Bearer ${this.accessToken}`);
     }
     const response = await fetch(`${this.baseUrl}${path}`, { ...init, headers });
-    const payload = (await response.json()) as V1Envelope<T>;
+    const payload = (await response.json().catch(() => ({}))) as V1Envelope<T>;
+    const requestError = new ReestreamApiError(
+      response.status,
+      payload.error ?? { code: 'request_failed', message: response.statusText },
+    );
+    if (
+      response.status === 401 &&
+      retryAfterRefresh &&
+      this.refreshToken &&
+      !path.startsWith('/auth/')
+    ) {
+      try {
+        await this.refreshStoredSession();
+        return this.request<T>(path, init, false);
+      } catch {
+        this.clearTokens();
+      }
+    }
     if (!response.ok || !payload.success) {
-      throw new ReestreamApiError(
-        response.status,
-        payload.error ?? { code: 'request_failed', message: response.statusText },
-      );
+      throw requestError;
     }
     return payload.data;
   }
@@ -358,6 +404,9 @@ export class ReestreamApiV1 {
     return this.request<AuthTokens>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
+    }, false).then((tokens) => {
+      this.setTokens(tokens);
+      return tokens;
     });
   }
 
@@ -365,7 +414,54 @@ export class ReestreamApiV1 {
     return this.request<AuthTokens>('/auth/refresh', {
       method: 'POST',
       body: JSON.stringify({ refreshToken }),
+    }, false).then((tokens) => {
+      this.setTokens(tokens);
+      return tokens;
     });
+  }
+
+  async logout(): Promise<void> {
+    try {
+      await this.request('/auth/logout', { method: 'POST' }, false);
+    } finally {
+      this.clearTokens();
+    }
+  }
+
+  private refreshStoredSession(): Promise<AuthTokens> {
+    if (!this.refreshToken) return Promise.reject(new Error('no refresh token available'));
+    if (!this.refreshPromise) {
+      const refreshToken = this.refreshToken;
+      this.refreshPromise = this.refresh(refreshToken).finally(() => {
+        this.refreshPromise = null;
+      });
+    }
+    return this.refreshPromise;
+  }
+
+  private readStoredToken(key: string): string | null {
+    try {
+      return window.sessionStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  }
+
+  private storeToken(key: string, token: string): void {
+    try {
+      window.sessionStorage.setItem(key, token);
+    } catch {
+      // Private browsing or storage-disabled environments still work in-memory.
+    }
+  }
+
+  private clearStoredTokens(): void {
+    try {
+      window.sessionStorage.removeItem(ReestreamApiV1.ACCESS_TOKEN_KEY);
+      window.sessionStorage.removeItem(ReestreamApiV1.REFRESH_TOKEN_KEY);
+    } catch {
+      // Ignore storage cleanup failures.
+    }
   }
 
   getProfile(): Promise<Profile> {
@@ -727,11 +823,8 @@ export class ReestreamApiV1 {
     const base = this.baseUrl.startsWith('http')
       ? this.baseUrl.replace(/^http/, 'ws')
       : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}${this.baseUrl}`;
-    const separator = path.includes('?') ? '&' : '?';
-    const token = this.accessToken
-      ? `${separator}access_token=${encodeURIComponent(this.accessToken)}`
-      : '';
-    return new WebSocket(`${base}${path}${token}`);
+    const protocol = this.accessToken ? [`reestream-bearer-${this.accessToken}`] : undefined;
+    return new WebSocket(`${base}${path}`, protocol);
   }
 }
 

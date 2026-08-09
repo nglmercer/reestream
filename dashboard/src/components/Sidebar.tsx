@@ -9,6 +9,7 @@ interface Props {
   channelWarning?: boolean;
   onNavigate: (section: DashboardSection) => void;
   onSettings: () => void;
+  onLogout?: () => void;
 }
 
 const items: Array<{ id: DashboardSection; icon: IconName; label: 'home' | 'past' | 'channels' }> = [
@@ -17,7 +18,7 @@ const items: Array<{ id: DashboardSection; icon: IconName; label: 'home' | 'past
   { id: 'channels', icon: 'radio', label: 'channels' },
 ];
 
-export function Sidebar({ active, collapsed = false, channelWarning = false, onNavigate, onSettings }: Props) {
+export function Sidebar({ active, collapsed = false, channelWarning = false, onNavigate, onSettings, onLogout }: Props) {
   const { t } = useLocale();
 
   return (
@@ -47,6 +48,12 @@ export function Sidebar({ active, collapsed = false, channelWarning = false, onN
           <Icon name="settings" size={18} />
           {!collapsed && <span>{t('nav.settings')}</span>}
         </button>
+        {onLogout && (
+          <button class="sidebar-nav-item" onClick={onLogout} title={collapsed ? t('auth.signOut') : undefined}>
+            <Icon name="logout" size={18} />
+            {!collapsed && <span>{t('auth.signOut')}</span>}
+          </button>
+        )}
       </div>
     </aside>
   );

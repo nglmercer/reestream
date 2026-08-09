@@ -1,15 +1,15 @@
 use clap::Parser;
-#[cfg(feature = "srt")]
+#[cfg(all(feature = "srt", any(feature = "hls", feature = "api")))]
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-#[cfg(feature = "srt")]
+#[cfg(all(feature = "srt", any(feature = "hls", feature = "api")))]
 use std::time::{Duration, Instant};
-#[cfg(feature = "srt")]
+#[cfg(all(feature = "srt", any(feature = "hls", feature = "api")))]
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
-#[cfg(feature = "srt")]
+#[cfg(all(feature = "srt", any(feature = "hls", feature = "api")))]
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::RwLock;
 #[cfg(any(feature = "hls", feature = "api"))]
@@ -104,9 +104,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if reestream::setup::is_first_run(&args.config) {
         eprintln!("No config file found at '{}'.", args.config.display());
-        eprintln!(
-            "Run with --setup to create one, or open http://localhost:8080 for the web setup."
-        );
+        eprintln!("Run with --setup, or open the configured HTTP endpoint for the web setup.");
         eprintln!();
         eprintln!("  reestream --setup");
         eprintln!();
@@ -165,42 +163,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let shutdown = Arc::new(reestream::hardening::GracefulShutdown::new());
     reestream::hardening::setup_signal_handlers(shutdown.clone()).await;
 
-    #[cfg(feature = "srt")]
-    {
-        let srt_config = reestream::srt::SrtConfig {
-            enabled: true,
-            listen_port: 3000,
-            passphrase: std::env::var("RESTREAM_SRT_PASSPHRASE")
-                .ok()
-                .filter(|value| !value.is_empty()),
-            ..Default::default()
-        };
-        if srt_config.enabled {
-            let srt_listener = Arc::new(reestream::srt::SrtListener::new(srt_config));
-            let mut srt_packets = srt_listener.subscribe_packets();
-            let fallback_key = stream_key.clone();
-            let srt_rtmp_port = *rtmp_port;
-            tokio::spawn(async move {
-                forward_srt_packets(&mut srt_packets, fallback_key, srt_rtmp_port).await;
-            });
-
-            let srt_l = srt_listener.clone();
-            tokio::spawn(async move {
-                if let Err(e) = srt_l.run().await {
-                    error!("SRT listener error: {}", e);
-                }
-            });
-            info!("SRT listener started on port 3000");
-        }
-    }
-
     let connection_pool = Arc::new(reestream::hardening::ConnectionPool::new(1000));
     let rate_limiter = Arc::new(reestream::hardening::RateLimiter::new(100));
 
     #[cfg(any(feature = "hls", feature = "api"))]
     let restream_store = Arc::new(
-        reestream::http_server::restream::RestreamStore::with_state_path(
+        reestream::http_server::restream::RestreamStore::with_runtime_config(
             args.config.with_extension("state.json"),
+            rtmp_addr.clone(),
+            *rtmp_port,
+            stream_key.clone(),
+            platforms.clone(),
         ),
     );
     #[cfg(any(feature = "hls", feature = "api"))]
@@ -208,6 +181,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(restream_store.clone() as Arc<dyn reestream::client::PublishKeyResolver>);
     #[cfg(not(any(feature = "hls", feature = "api")))]
     let publish_resolver: Option<Arc<dyn reestream::client::PublishKeyResolver>> = None;
+    #[cfg(any(feature = "hls", feature = "api"))]
+    let status_reporter: Option<Arc<dyn reestream::client::DestinationStatusReporter>> =
+        Some(restream_store.clone() as Arc<dyn reestream::client::DestinationStatusReporter>);
+    #[cfg(not(any(feature = "hls", feature = "api")))]
+    let status_reporter: Option<Arc<dyn reestream::client::DestinationStatusReporter>> = None;
+
+    #[cfg(all(feature = "srt", any(feature = "hls", feature = "api")))]
+    {
+        let enabled = std::env::var("RESTREAM_SRT_ENABLED")
+            .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false);
+        let passphrase = std::env::var("RESTREAM_SRT_PASSPHRASE")
+            .ok()
+            .filter(|value| !value.trim().is_empty());
+        let listen_port = std::env::var("RESTREAM_SRT_PORT")
+            .ok()
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(3000);
+        if enabled && passphrase.is_some() {
+            let srt_config = reestream::srt::SrtConfig {
+                enabled: true,
+                listen_port,
+                passphrase,
+                ..Default::default()
+            };
+            let srt_listener = Arc::new(reestream::srt::SrtListener::new(srt_config));
+            let mut srt_packets = srt_listener.subscribe_packets();
+            let fallback_key = stream_key.clone();
+            let srt_rtmp_port = *rtmp_port;
+            let srt_store = restream_store.clone();
+            tokio::spawn(async move {
+                forward_srt_packets(&mut srt_packets, fallback_key, srt_rtmp_port, srt_store).await;
+            });
+
+            let srt_l = srt_listener.clone();
+            tokio::spawn(async move {
+                if let Err(error) = srt_l.run().await {
+                    error!("SRT listener error: {}", error);
+                }
+            });
+            info!("SRT listener started on port {}", listen_port);
+        } else if enabled {
+            warn!("SRT requested but disabled because RESTREAM_SRT_PASSPHRASE is missing");
+        }
+    }
 
     // Create StreamManager and DataBus shared between HTTP server and RTMP handler
     #[cfg(any(feature = "hls", feature = "api"))]
@@ -262,19 +280,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         });
-        let hls_config = reestream::http_server::hls::HlsConfig::default();
+        let (http_addr, http_port) = configured_http_endpoint();
+        let hls_segment_dir = std::env::var_os("RESTREAM_HLS_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| restream_store.storage_root_path().join("hls"));
+        let hls_config = reestream::http_server::hls::HlsConfig {
+            segment_dir: hls_segment_dir.clone(),
+            playlist_path: hls_segment_dir.join("stream.m3u8"),
+            http_addr: http_addr.clone(),
+            http_port,
+            ..Default::default()
+        };
+        let ffmpeg_path = configured_ffmpeg_path(&args.config);
         let recording_config = reestream::http_server::recording::RecordingConfig {
             enabled: std::env::var("RESTREAM_RECORDING_ENABLED")
                 .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
                 .unwrap_or(true),
             output_dir: restream_store.storage_root_path().join("recordings"),
+            ffmpeg_path: ffmpeg_path.clone(),
             ..Default::default()
         };
         let recording_manager = Arc::new(reestream::http_server::recording::RecordingManager::new(
             recording_config,
         ));
-        let playback_manager =
-            Arc::new(reestream::http_server::playback::PlaybackManager::default());
+        let playback_manager = Arc::new(
+            reestream::http_server::playback::PlaybackManager::with_ffmpeg_path(
+                ffmpeg_path.clone(),
+            ),
+        );
         let scheduler_store = restream_store.clone();
         let scheduler_recording_manager = recording_manager.clone();
         let scheduler_playback_manager = playback_manager.clone();
@@ -310,10 +343,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let flv_state = reestream::http_server::flv::FlvState::default();
 
         // Create HLS transmuxer (uses ffmpeg to create HLS segments from FLV data)
-        let hls_segment_dir = std::path::PathBuf::from("/tmp/reestream/hls");
-        let hls_transmuxer = reestream::http_server::hls_transmux::HlsTransmuxer::new(
+        let hls_transmuxer = reestream::http_server::hls_transmux::HlsTransmuxer::new_with_ffmpeg(
             hls_segment_dir.clone(),
             hls_segment_dir.join("stream.m3u8"),
+            ffmpeg_path,
         );
 
         // Bridge DataBus → FlvState + HLS transmuxer + bitrate
@@ -342,10 +375,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         result = rx.recv() => {
                             match result {
                                 Ok(packet) => {
-                                    bytes_this_second += packet.data.len() as u64;
-                                    if current_stream_id.is_none() {
+                                    if current_stream_id.as_deref() != Some(packet.stream_id.as_str()) {
+                                        if hls_tx.is_some() {
+                                            transmuxer.stop().await;
+                                            hls_tx = None;
+                                        }
+                                        flv.clear().await;
                                         current_stream_id = Some(packet.stream_id.clone());
+                                        bytes_this_second = 0;
                                     }
+                                    bytes_this_second += packet.data.len() as u64;
 
                                     let tag_type = if packet.is_video { 0x09 } else { 0x08 };
                                     let flv_tag = reestream::http_server::flv::build_flv_tag(
@@ -420,14 +459,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             config_path: args.config.clone(),
             restream: restream_store,
         };
+        let http_addr_for_server = http_addr.clone();
         tokio::spawn(async move {
-            if let Err(e) =
-                reestream::http_server::http::start_http_server("0.0.0.0", 8080, app_state).await
+            if let Err(e) = reestream::http_server::http::start_http_server(
+                &http_addr_for_server,
+                http_port,
+                app_state,
+            )
+            .await
             {
                 error!("HTTP server error: {}", e);
             }
         });
-        info!("HTTP server starting on 0.0.0.0:8080");
+        info!("HTTP server starting on {}:{}", http_addr, http_port);
         (Some(sm), Some(data_bus_arc), Some(platform_event_rx))
     };
 
@@ -438,9 +482,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     if !stream_key.is_empty() {
-        info!("Open http://localhost:8080 for the dashboard");
+        info!("Open the configured HTTP endpoint for the dashboard");
     } else {
-        warn!("No stream key configured — open http://localhost:8080/setup to complete setup");
+        warn!(
+            "No stream key configured — open the configured HTTP endpoint at /setup to complete setup"
+        );
     }
 
     loop {
@@ -480,13 +526,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         info!("New incoming connection from {}", peer_addr);
                         let platforms = platforms.clone();
-                        let stream_key = stream_key.clone();
+                        let stream_key = if publish_resolver.is_some() {
+                            String::new()
+                        } else {
+                            stream_key.clone()
+                        };
                         let registrar: Option<Arc<dyn reestream::client::StreamRegistrar>> = stream_manager.clone().map(|sm| sm as Arc<dyn reestream::client::StreamRegistrar>);
                         let pubber = data_bus.clone();
                         let pev = platform_event_rx.as_ref().unwrap().resubscribe();
                         let resolver = publish_resolver.clone();
+                        let reporter = status_reporter.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = reestream::client::handle_publisher_with_resolver(
+                            if let Err(e) = reestream::client::handle_publisher_with_resolver_and_status(
                                 socket,
                                 platforms,
                                 stream_key,
@@ -494,6 +545,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 pubber,
                                 pev,
                                 resolver,
+                                reporter,
                             )
                             .await
                             {
@@ -520,14 +572,41 @@ fn run_setup(config_path: &std::path::Path) -> Result<(), Box<dyn std::error::Er
     Ok(())
 }
 
-#[cfg(feature = "srt")]
+fn configured_ffmpeg_path(config_path: &std::path::Path) -> PathBuf {
+    if let Some(path) = std::env::var_os("RESTREAM_FFMPEG_PATH") {
+        return PathBuf::from(path);
+    }
+    #[cfg(feature = "ffmpeg")]
+    {
+        let data_dir = config_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join(".reestream");
+        let resolver = reestream::ffmpeg::BinaryResolver::new(data_dir);
+        if let Ok(path) = resolver.find_ffmpeg() {
+            return path;
+        }
+    }
+    PathBuf::from("ffmpeg")
+}
+
+fn configured_http_endpoint() -> (String, u16) {
+    let addr = std::env::var("RESTREAM_HTTP_ADDR").unwrap_or_else(|_| "0.0.0.0".into());
+    let port = std::env::var("RESTREAM_HTTP_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(8080);
+    (addr, port)
+}
+
+#[cfg(all(feature = "srt", any(feature = "hls", feature = "api")))]
 struct SrtForwardProcess {
     stdin: ChildStdin,
     child: Child,
     last_packet: Instant,
 }
 
-#[cfg(feature = "srt")]
+#[cfg(all(feature = "srt", any(feature = "hls", feature = "api")))]
 fn is_safe_srt_stream_id(stream_id: &str) -> bool {
     !stream_id.is_empty()
         && stream_id.len() <= 256
@@ -536,12 +615,14 @@ fn is_safe_srt_stream_id(stream_id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
-#[cfg(feature = "srt")]
+#[cfg(all(feature = "srt", any(feature = "hls", feature = "api")))]
 async fn forward_srt_packets(
     packets: &mut tokio::sync::broadcast::Receiver<reestream::srt::SrtPacket>,
     fallback_key: String,
     rtmp_port: u16,
+    store: Arc<reestream::http_server::restream::RestreamStore>,
 ) {
+    const MAX_BRIDGES: usize = 8;
     let mut forwards = HashMap::<String, SrtForwardProcess>::new();
     let mut cleanup = tokio::time::interval(Duration::from_secs(10));
     cleanup.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -566,9 +647,20 @@ async fn forward_srt_packets(
                     continue;
                 }
 
+                if !store.accepts_stream_key(&stream_key).await {
+                    warn!("Ignoring SRT packet with an unauthorized stream id");
+                    continue;
+                }
+
                 if !forwards.contains_key(&stream_key) {
+                    if forwards.len() >= MAX_BRIDGES {
+                        warn!("SRT bridge limit reached; rejecting a new stream");
+                        continue;
+                    }
                     let target = format!("rtmp://127.0.0.1:{rtmp_port}/live/{stream_key}");
-                    let mut child = match Command::new("ffmpeg")
+                    let ffmpeg = std::env::var("RESTREAM_FFMPEG_PATH")
+                        .unwrap_or_else(|_| "ffmpeg".into());
+                    let mut child = match Command::new(ffmpeg)
                         .args([
                             "-hide_banner",
                             "-loglevel",
@@ -599,7 +691,7 @@ async fn forward_srt_packets(
                         let _ = child.kill().await;
                         continue;
                     };
-                    info!(stream_key = %stream_key, target = %target, "SRT-to-RTMP bridge started");
+                    info!("SRT-to-RTMP bridge started");
                     forwards.insert(
                         stream_key.clone(),
                         SrtForwardProcess {
@@ -617,7 +709,7 @@ async fn forward_srt_packets(
                     continue;
                 };
                 if let Err(error) = write_result {
-                    warn!(stream_key = %stream_key, "SRT-to-RTMP bridge stopped: {}", error);
+                    warn!("SRT-to-RTMP bridge stopped: {}", error);
                     if let Some(mut forward) = forwards.remove(&stream_key) {
                         let _ = forward.child.kill().await;
                     }
@@ -633,7 +725,7 @@ async fn forward_srt_packets(
                     if let Some(mut forward) = forwards.remove(&stream_key) {
                         let _ = forward.stdin.shutdown().await;
                         let _ = forward.child.kill().await;
-                        info!(stream_key = %stream_key, "SRT-to-RTMP bridge timed out");
+                        info!("SRT-to-RTMP bridge timed out");
                     }
                 }
             }

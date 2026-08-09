@@ -210,11 +210,7 @@ async fn v1_private_aliases_and_official_event_subresources_are_available() {
     let (status, ingest) = json_response(&mut app, "GET", "/api/v1/user/ingest", None).await;
     assert_eq!(status, axum::http::StatusCode::OK);
     assert_eq!(ingest["data"]["ingestId"], "local");
-    assert!(
-        ingest["data"]["srtUrl"]
-            .as_str()
-            .is_some_and(|url| url.starts_with("srt://") && url.contains("streamid="))
-    );
+    assert!(ingest["data"]["srtUrl"].is_null());
 
     let (status, chat_url) = json_response(&mut app, "GET", "/api/v1/chat-url", None).await;
     assert_eq!(status, axum::http::StatusCode::OK);

@@ -9,9 +9,15 @@ use tracing::{error, info};
 pub struct RecordingConfig {
     pub enabled: bool,
     pub output_dir: PathBuf,
+    #[serde(default = "default_ffmpeg_path")]
+    pub ffmpeg_path: PathBuf,
     pub format: RecordingFormat,
     pub segment_duration_secs: u64,
     pub max_file_size_mb: u64,
+}
+
+fn default_ffmpeg_path() -> PathBuf {
+    PathBuf::from("ffmpeg")
 }
 
 impl Default for RecordingConfig {
@@ -19,6 +25,7 @@ impl Default for RecordingConfig {
         Self {
             enabled: false,
             output_dir: PathBuf::from("/tmp/reestream/recordings"),
+            ffmpeg_path: default_ffmpeg_path(),
             format: RecordingFormat::Mp4,
             segment_duration_secs: 0,
             max_file_size_mb: 4096,
@@ -117,8 +124,24 @@ impl RecordingManager {
             .unwrap_or_default()
             .as_secs();
 
+        let safe_stream_id: String = stream_id
+            .chars()
+            .take(128)
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                    character
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let safe_stream_id = if safe_stream_id.is_empty() {
+            "stream".into()
+        } else {
+            safe_stream_id
+        };
         let ext = self.config.format.extension();
-        let filename = format!("{stream_id}_{timestamp}.{ext}");
+        let filename = format!("{safe_stream_id}_{timestamp}.{ext}");
         let path = self.config.output_dir.join(&filename);
 
         let info = RecordingInfo {
@@ -133,7 +156,7 @@ impl RecordingManager {
         };
 
         let ffmpeg_args = self.build_ffmpeg_args(input_url, &path);
-        let child = tokio::process::Command::new("ffmpeg")
+        let child = tokio::process::Command::new(&self.config.ffmpeg_path)
             .args(&ffmpeg_args)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -152,6 +175,7 @@ impl RecordingManager {
         let rec_id = id.clone();
         let input_owned = input_url.to_string();
         let path_owned = path.clone();
+        let max_file_size_bytes = self.config.max_file_size_mb.saturating_mul(1024 * 1024);
 
         tokio::spawn(async move {
             info!(
@@ -188,6 +212,20 @@ impl RecordingManager {
                         break;
                     }
                     Ok(None) => {
+                        if max_file_size_bytes > 0
+                            && tokio::fs::metadata(&path_owned)
+                                .await
+                                .map(|metadata| metadata.len() > max_file_size_bytes)
+                                .unwrap_or(false)
+                        {
+                            let _ = child.lock().await.kill().await;
+                            let mut recs = recordings.write().await;
+                            if let Some(rec) = recs.iter_mut().find(|r| r.id == rec_id) {
+                                rec.status = RecordingStatus::Error;
+                            }
+                            processes.lock().await.remove(&rec_id);
+                            break;
+                        }
                         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                     }
                     Err(error) => {

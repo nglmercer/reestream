@@ -36,6 +36,9 @@ impl SrtConfig {
         if self.latency_ms == 0 {
             return Err("SRT latency_ms cannot be 0".into());
         }
+        if self.enabled && self.passphrase.is_none() {
+            return Err("SRT passphrase is required when SRT is enabled".into());
+        }
         if let Some(ref pass) = self.passphrase
             && pass.len() < 10
         {

@@ -1,7 +1,7 @@
 //! Local file-to-RTMP playback for scheduled and prerecorded events.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::process::Command;
 use tokio::sync::Mutex;
@@ -9,12 +9,26 @@ use tracing::{error, info};
 
 type ChildHandle = Arc<Mutex<tokio::process::Child>>;
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct PlaybackManager {
     processes: Arc<Mutex<HashMap<String, ChildHandle>>>,
+    ffmpeg_path: Arc<PathBuf>,
+}
+
+impl Default for PlaybackManager {
+    fn default() -> Self {
+        Self::with_ffmpeg_path("ffmpeg")
+    }
 }
 
 impl PlaybackManager {
+    pub fn with_ffmpeg_path(path: impl Into<PathBuf>) -> Self {
+        Self {
+            processes: Arc::new(Mutex::new(HashMap::new())),
+            ffmpeg_path: Arc::new(path.into()),
+        }
+    }
+
     pub async fn start(
         &self,
         event_id: &str,
@@ -52,7 +66,7 @@ impl PlaybackManager {
             "-y".into(),
             output_url.to_string(),
         ]);
-        let child = Command::new("ffmpeg")
+        let child = Command::new(self.ffmpeg_path.as_ref())
             .args(args)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'preact/hooks';
-import { apiV1 } from './api';
+import { apiV1, ReestreamApiError } from './api';
 import type { Channel as V1Channel, Event, PlatformCatalogEntry, StreamType } from './api';
 import { usePolling, useStreamWs } from './hooks';
 import { useLocale } from './hooks/useLocale';
@@ -9,6 +9,7 @@ import { HomePage } from './components/HomePage';
 import { CreateStreamDialog } from './components/CreateStreamDialog';
 import { StreamDetail } from './components/StreamDetail';
 import { ChannelsPage } from './components/ChannelsPage';
+import { LoginScreen } from './components/LoginScreen';
 import { SetupWizard } from './components/SetupWizard';
 import { SettingsPanel } from './components/SettingsPanel';
 import type { ChannelUpdate, DashboardChannel } from './components/PlatformsTable';
@@ -52,6 +53,9 @@ export function App() {
   const { addLog } = useLogger();
   const [initialRoute] = useState(routeFromLocation);
   const [needsSetup, setNeedsSetup] = useState<boolean | null>(null);
+  const [authRequired, setAuthRequired] = useState<boolean | null>(null);
+  const [authenticated, setAuthenticated] = useState(apiV1.isAuthenticated());
+  const [bootError, setBootError] = useState<string | null>(null);
   const [section, setSection] = useState<DashboardSection>(initialRoute.section);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(initialRoute.eventId);
   const [showCreate, setShowCreate] = useState(false);
@@ -88,19 +92,53 @@ export function App() {
 
   useEffect(() => {
     let active = true;
-    apiV1.getSetupStatus().then((status) => {
-      if (active) setNeedsSetup(status.firstRun);
-    }).catch(() => {
-      if (active) setNeedsSetup(false);
+    apiV1.getSetupStatus().then(async (status) => {
+      if (!active) return;
+      if (status.firstRun) {
+        setNeedsSetup(true);
+        setAuthRequired(false);
+        return;
+      }
+      setNeedsSetup(false);
+      try {
+        const serverStatus = await apiV1.getStatus();
+        if (!active) return;
+        setAuthRequired(serverStatus.authRequired);
+        if (!serverStatus.authRequired) {
+          setAuthenticated(true);
+        } else if (apiV1.isAuthenticated()) {
+          await apiV1.getProfile();
+          if (active) setAuthenticated(true);
+        } else {
+          setAuthenticated(false);
+        }
+      } catch (cause) {
+        if (!active) return;
+        if (cause instanceof ReestreamApiError && cause.status === 401) {
+          setAuthRequired(true);
+          setAuthenticated(false);
+        } else {
+          setBootError(cause instanceof Error ? cause.message : String(cause));
+        }
+      }
+    }).catch((cause) => {
+      if (active) setBootError(cause instanceof Error ? cause.message : String(cause));
     });
     return () => { active = false; };
   }, []);
 
-  const eventsPoll = usePolling(() => apiV1.getEvents(), EVENTS_POLL);
+  useEffect(() => {
+    const handleExpired = () => setAuthenticated(false);
+    window.addEventListener('reestream-auth-expired', handleExpired);
+    return () => window.removeEventListener('reestream-auth-expired', handleExpired);
+  }, []);
+
+  const dashboardEnabled = needsSetup === false && authRequired !== null && (!authRequired || authenticated);
+  const eventsPoll = usePolling(() => apiV1.getEvents(), EVENTS_POLL, dashboardEnabled);
   const channelsPoll = usePolling(async () => {
     const [channels, catalog] = await Promise.all([apiV1.getChannels(), apiV1.getPlatforms()]);
     return channels.map((channel) => toDashboardChannel(channel, catalog));
-  }, CHANNELS_POLL);
+  }, CHANNELS_POLL, dashboardEnabled);
   const { connected: wsConnected } = useStreamWs({
     onInit: (events) => {
       setRealtimeEvents(events);
@@ -114,7 +152,7 @@ export function App() {
         return event.status === 'ended' || event.status === 'cancelled' ? withoutEvent : [...withoutEvent, event];
       });
     },
-  });
+  }, dashboardEnabled);
 
   const events = wsConnected && wsInitialized ? realtimeEvents : eventsPoll.data ?? [];
   const channels = channelsPoll.data ?? [];
@@ -195,6 +233,10 @@ export function App() {
     }
   }, [refreshChannels]);
 
+  const logout = useCallback(() => {
+    void apiV1.logout().finally(() => setAuthenticated(false));
+  }, []);
+
   const channelWarning = channels.some((channel) => !!channel.lastError);
   const page = useMemo(() => {
     if (selectedEvent) {
@@ -210,11 +252,15 @@ export function App() {
   }, [selectedEvent, section, events, channels, eventsPoll.loading, channelsPoll.loading, addChannel, removeChannel, updateChannel, updateConfiguredChannel, toggleChannel, duplicateEvent, deleteEvent, updateRealtimeEvent, navigate, openEvent, refreshEvents]);
 
   if (needsSetup === true) return <SetupWizard />;
-  if (needsSetup === null) return <div class="boot-screen"><div class="brand-mark"><span>✦</span></div><span>{t('common.loading')}</span></div>;
+  if (bootError) return <div class="boot-screen"><div class="brand-mark"><span>✦</span></div><span>{bootError}</span></div>;
+  if (needsSetup === null || authRequired === null) return <div class="boot-screen"><div class="brand-mark"><span>✦</span></div><span>{t('common.loading')}</span></div>;
+  if (authRequired && !authenticated) {
+    return <LoginScreen onAuthenticated={() => setAuthenticated(true)} />;
+  }
 
   return (
     <div class="dashboard-app">
-      <Sidebar active={section} collapsed={!!selectedEvent} channelWarning={channelWarning} onNavigate={navigate} onSettings={() => setShowSettings(true)} />
+      <Sidebar active={section} collapsed={!!selectedEvent} channelWarning={channelWarning} onNavigate={navigate} onSettings={() => setShowSettings(true)} onLogout={authRequired ? logout : undefined} />
       <main class={`dashboard-main ${selectedEvent ? 'dashboard-main--detail' : ''}`}>
         {page}
       </main>

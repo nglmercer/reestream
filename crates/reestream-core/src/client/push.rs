@@ -96,9 +96,7 @@ impl PushClient {
         let _ = tcp_stream.set_nodelay(true);
 
         let mut stream: DynStream = if url.scheme() == "rtmps" {
-            let native = native_tls::TlsConnector::builder()
-                .danger_accept_invalid_certs(true)
-                .build()?;
+            let native = native_tls::TlsConnector::builder().build()?;
             let connector = TlsConnector::from(native);
             Box::new(connector.connect(&host, tcp_stream).await?)
         } else {
