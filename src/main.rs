@@ -3,11 +3,15 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::RwLock;
+#[cfg(any(feature = "hls", feature = "api"))]
+use tokio::sync::broadcast;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
-use reestream::config::{Config, PlatformEvent, platform_id_from};
+use reestream::config::Config;
+#[cfg(any(feature = "hls", feature = "api"))]
+use reestream::config::{PlatformEvent, platform_id_from};
 
 type StreamManagerPair = (
     Option<Arc<dyn reestream::client::StreamRegistrar>>,
@@ -15,6 +19,7 @@ type StreamManagerPair = (
     Option<tokio::sync::broadcast::Receiver<reestream::config::PlatformEvent>>,
 );
 
+#[cfg(any(feature = "hls", feature = "api"))]
 async fn sync_product_platform(
     platforms: &Arc<RwLock<Vec<reestream::config::Platform>>>,
     event: &PlatformEvent,
@@ -27,22 +32,20 @@ async fn sync_product_platform(
             key,
         } => {
             let exists = configured.iter().any(|platform| {
-                platform_id_from(&platform.url.to_string(), &platform.key) == *platform_id
+                platform_id_from(platform.url.as_str(), &platform.key) == *platform_id
             });
-            if !exists {
-                if let Ok(url) = url::Url::parse(url) {
-                    configured.push(reestream::config::Platform {
-                        url,
-                        key: key.clone(),
-                        enabled: true,
-                        orientation: Default::default(),
-                    });
-                }
+            if !exists && let Ok(url) = url::Url::parse(url) {
+                configured.push(reestream::config::Platform {
+                    url,
+                    key: key.clone(),
+                    enabled: true,
+                    orientation: Default::default(),
+                });
             }
         }
         PlatformEvent::Removed { platform_id } => {
             configured.retain(|platform| {
-                platform_id_from(&platform.url.to_string(), &platform.key) != *platform_id
+                platform_id_from(platform.url.as_str(), &platform.key) != *platform_id
             });
         }
         PlatformEvent::Toggled {
@@ -52,7 +55,7 @@ async fn sync_product_platform(
             enabled,
         } => {
             if let Some(platform) = configured.iter_mut().find(|platform| {
-                platform_id_from(&platform.url.to_string(), &platform.key) == *platform_id
+                platform_id_from(platform.url.as_str(), &platform.key) == *platform_id
             }) {
                 platform.enabled = *enabled;
                 platform.key = key.clone();

@@ -135,7 +135,9 @@ pub fn get_setup_status(config_path: &Path) -> SetupStatus {
                 && config.stream_key != "test-key";
             let platform_count = config.platform.as_ref().map_or(0, |p| p.len());
             SetupStatus {
-                first_run: !has_stream_key || platform_count == 0,
+                // Output platforms are optional: a valid setup may only expose
+                // the local RTMP ingest endpoint until platforms are added later.
+                first_run: !has_stream_key,
                 config_exists: true,
                 has_stream_key,
                 platform_count,
@@ -458,6 +460,27 @@ stream_key = "test-key"
         .unwrap();
         let status = get_setup_status(&path);
         assert!(status.first_run);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_get_setup_status_without_platforms_is_complete() {
+        let dir = std::env::temp_dir().join("reestream_test_status_no_platforms");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            r#"rtmp_addr = "0.0.0.0"
+rtmp_port = 1935
+stream_key = "local-ingest-key"
+"#,
+        )
+        .unwrap();
+
+        let status = get_setup_status(&path);
+        assert!(!status.first_run);
+        assert!(status.has_stream_key);
+        assert_eq!(status.platform_count, 0);
         let _ = std::fs::remove_file(&path);
     }
 

@@ -1,3 +1,5 @@
+#![cfg(any(feature = "hls", feature = "api"))]
+
 use axum::{body::Body, http::Request};
 use reestream_server::{
     databus::DataBus,

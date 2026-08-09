@@ -684,6 +684,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/", get(dashboard::serve_index))
         .route("/dashboard", get(dashboard::serve_index))
+        .route("/setup", get(dashboard::serve_index))
         .route("/assets/{*path}", get(dashboard::serve_assets))
         .route("/favicon.svg", get(dashboard::serve_favicon))
         .route("/{path}", get(dashboard::serve_static))
@@ -938,5 +939,33 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(json["success"].as_bool().unwrap());
         assert!(json["data"]["version"].is_string());
+    }
+
+    #[tokio::test]
+    async fn test_setup_route_serves_dashboard() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let response = create_router(test_state())
+            .oneshot(
+                Request::builder()
+                    .uri("/setup")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("content-type")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "text/html; charset=utf-8"
+        );
     }
 }
