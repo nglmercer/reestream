@@ -76,11 +76,18 @@ pub(crate) async fn build_safe_http_client(
     let host = parsed
         .host_str()
         .ok_or_else(|| "webhook URL must include a host".to_string())?;
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("webhook URL cannot contain embedded credentials".into());
+    }
     let port = parsed
         .port_or_known_default()
         .ok_or_else(|| "webhook URL has no known port".to_string())?;
-    let addresses = tokio::net::lookup_host((host, port))
+    let lookup_timeout = timeout
+        .max(Duration::from_secs(1))
+        .min(Duration::from_secs(5));
+    let addresses = tokio::time::timeout(lookup_timeout, tokio::net::lookup_host((host, port)))
         .await
+        .map_err(|_| "webhook host lookup timed out".to_string())?
         .map_err(|error| format!("webhook host lookup failed: {error}"))?
         .collect::<Vec<SocketAddr>>();
     let Some(address) = addresses.first().copied() else {
@@ -1853,9 +1860,7 @@ impl RestreamStore {
                 Some(event.clone())
             })
             .await;
-        if updated.is_none() {
-            return None;
-        }
+        updated.as_ref()?;
         let event = self.get_event(event_id).await?;
         self.publish_event("event.updated", &event).await;
         Some(event)
@@ -1894,9 +1899,7 @@ impl RestreamStore {
                 Some(event.clone())
             })
             .await;
-        if updated.is_none() {
-            return None;
-        }
+        updated.as_ref()?;
         let event = self.get_event(event_id).await?;
         self.publish_event("event.started", &event).await;
         Some(event)
@@ -1949,9 +1952,7 @@ impl RestreamStore {
                 Some(event.clone())
             })
             .await;
-        if updated.is_none() {
-            return None;
-        }
+        updated.as_ref()?;
         let event = self.get_event(event_id).await?;
         self.publish_event("event.ended", &event).await;
         Some(event)
@@ -1969,9 +1970,7 @@ impl RestreamStore {
                 Some(event.clone())
             })
             .await;
-        if updated.is_none() {
-            return None;
-        }
+        updated.as_ref()?;
         let event = self.get_event(event_id).await?;
         self.publish_event("event.cancelled", &event).await;
         Some(event)
@@ -2011,9 +2010,7 @@ impl RestreamStore {
                 Some(event.clone())
             })
             .await;
-        if updated.is_none() {
-            return None;
-        }
+        updated.as_ref()?;
         self.get_event(event_id).await
     }
 
@@ -2030,9 +2027,7 @@ impl RestreamStore {
                 Some(event.clone())
             })
             .await;
-        if updated.is_none() {
-            return None;
-        }
+        updated.as_ref()?;
         self.get_event(event_id).await
     }
 

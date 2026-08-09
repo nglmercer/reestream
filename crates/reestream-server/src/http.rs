@@ -213,11 +213,7 @@ async fn get_config(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 fn mask_key(key: &str) -> String {
-    if key.len() <= 4 {
-        "****".to_string()
-    } else {
-        format!("{}…{}", &key[..4], &key[key.len() - 4..])
-    }
+    reestream_core::setup::mask_secret(key)
 }
 
 async fn update_config(
@@ -375,6 +371,19 @@ async fn reset_stream_key(State(state): State<AppState>) -> impl IntoResponse {
 
 async fn list_platforms(State(state): State<AppState>) -> impl IntoResponse {
     let platforms = state.stream_manager.get_platforms().await;
+    let platforms = platforms
+        .into_iter()
+        .map(|platform| {
+            serde_json::json!({
+                "id": platform.id,
+                "name": platform.name,
+                "url": platform.url,
+                "key_masked": mask_key(&platform.key),
+                "key_configured": !platform.key.is_empty(),
+                "enabled": platform.enabled,
+            })
+        })
+        .collect::<Vec<_>>();
     axum::Json(ApiResponse::ok(platforms))
 }
 
@@ -874,6 +883,33 @@ mod tests {
         let resp: ApiResponse<()> = ApiResponse::err("fail");
         assert!(!resp.success);
         assert_eq!(resp.error.unwrap(), "fail");
+    }
+
+    #[test]
+    fn test_mask_key_does_not_reveal_short_or_unicode_keys() {
+        assert_eq!(mask_key("secret"), "****");
+        assert_eq!(mask_key("clave-secreta"), "clav…reta");
+    }
+
+    #[tokio::test]
+    async fn test_legacy_platform_list_masks_destination_keys() {
+        let state = test_state();
+        state
+            .stream_manager
+            .add_platform(
+                "Test".into(),
+                "rtmp://example.test/live".into(),
+                "destination-secret".into(),
+            )
+            .await;
+        let response = list_platforms(State(state)).await.into_response();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(value["data"][0]["key"].is_null());
+        assert_eq!(value["data"][0]["key_masked"], "dest…cret");
+        assert_eq!(value["data"][0]["key_configured"], true);
     }
 
     #[test]

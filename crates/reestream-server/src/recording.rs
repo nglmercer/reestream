@@ -173,16 +173,11 @@ impl RecordingManager {
         let recordings = self.recordings.clone();
         let processes = self.processes.clone();
         let rec_id = id.clone();
-        let input_owned = input_url.to_string();
         let path_owned = path.clone();
         let max_file_size_bytes = self.config.max_file_size_mb.saturating_mul(1024 * 1024);
 
         tokio::spawn(async move {
-            info!(
-                "Recording started: {} -> {}",
-                input_owned,
-                path_owned.display()
-            );
+            info!("Recording started: {} -> {}", rec_id, path_owned.display());
             loop {
                 let status = {
                     let mut child = child.lock().await;

@@ -82,12 +82,10 @@ impl PlaybackManager {
         let processes = self.processes.clone();
         let event_id_owned = event_id.to_string();
         let source_path = source_path.to_path_buf();
-        let output_url = output_url.to_string();
         tokio::spawn(async move {
             info!(
                 event_id = %event_id_owned,
                 source = %source_path.display(),
-                output = %output_url,
                 "file playback started"
             );
             loop {

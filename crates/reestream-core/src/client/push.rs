@@ -164,6 +164,7 @@ impl PushClient {
         let state_clone = client_state.clone();
         let tx_clone = tx.clone();
         let stream_key_clone = stream_key.clone();
+        let platform_id_clone = platform_id.clone();
 
         // Reader Task
         let reader_handle = tokio::spawn(async move {
@@ -171,7 +172,7 @@ impl PushClient {
             loop {
                 tokio::select! {
                     _ = shutdown_rx.recv() => {
-                        info!("External shutdown requested for {}", stream_key_clone);
+                        info!("External shutdown requested for platform {}", platform_id_clone);
                         break;
                     }
                     n_res = rd.read(&mut buf) => {

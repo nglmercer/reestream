@@ -357,3 +357,26 @@ async fn restored_event_keys_are_available_to_scheduler_and_removed_with_events(
     let _ = std::fs::remove_file(state_path.with_extension("key"));
     let _ = std::fs::remove_file(state_path.with_extension("secrets"));
 }
+
+#[tokio::test]
+async fn cancelled_event_keys_are_rejected_and_terminal_events_cannot_be_cancelled_again() {
+    let store = RestreamStore::new();
+    let event = store
+        .create_event(
+            None,
+            reestream_server::restream::StreamType::Encoder,
+            "Cancelled event".into(),
+            String::new(),
+            None,
+            Vec::new(),
+            None,
+            0,
+        )
+        .await;
+    let stream_key = event.ingest.stream_key.clone();
+
+    assert!(store.accepts_stream_key(&stream_key).await);
+    assert!(store.cancel_event(&event.id).await.is_some());
+    assert!(!store.accepts_stream_key(&stream_key).await);
+    assert!(store.cancel_event(&event.id).await.is_none());
+}

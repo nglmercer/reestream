@@ -112,6 +112,13 @@ async fn sync_platforms_for_event(platforms: &Arc<RwLock<Vec<Platform>>>, event:
                 if let Ok(url) = Url::parse(url) {
                     platform.url = url;
                 }
+            } else if *enabled && let Ok(url) = Url::parse(url) {
+                configured.push(Platform {
+                    url,
+                    key: key.clone(),
+                    enabled: true,
+                    orientation: Default::default(),
+                });
             }
         }
     }
@@ -319,7 +326,7 @@ pub async fn handle_publisher_with_resolver_and_status(
                                 let url_parsed = match Url::parse(&url) {
                                     Ok(u) => u,
                                     Err(e) => {
-                                        error!("Invalid platform URL '{}': {}", url, e);
+                                        error!("Invalid platform URL for platform {}: {}", platform_id, e);
                                         continue;
                                     }
                                 };
@@ -332,7 +339,7 @@ pub async fn handle_publisher_with_resolver_and_status(
                                             None,
                                         )
                                         .await;
-                                        info!("Connected to newly enabled platform: {} (id={})", url, platform_id);
+                                        info!("Connected to newly enabled platform {}", platform_id);
                                         push_clients.push(pc);
                                     },
                                     _ => {
@@ -343,7 +350,7 @@ pub async fn handle_publisher_with_resolver_and_status(
                                             Some("destination connection failed".into()),
                                         )
                                         .await;
-                                        error!("Failed to connect to newly enabled platform: {}", url);
+                                        error!("Failed to connect to newly enabled platform {}", platform_id);
                                         spawn_destination_reconnect(
                                             &reconnect_tx,
                                             &reconnect_stop_rx,
@@ -377,11 +384,11 @@ pub async fn handle_publisher_with_resolver_and_status(
                         if push_clients.iter().any(|pc| pc.platform_id == platform_id) {
                             info!("Platform {} already has an active PushClient", platform_id);
                         } else {
-                            info!("New platform added, creating PushClient: {}", url);
+                            info!("New platform added, creating PushClient: {}", platform_id);
                             let url_parsed = match Url::parse(&url) {
                                 Ok(u) => u,
                                 Err(e) => {
-                                    error!("Invalid platform URL '{}': {}", url, e);
+                                    error!("Invalid platform URL for platform {}: {}", platform_id, e);
                                     continue;
                                 }
                             };
@@ -394,7 +401,7 @@ pub async fn handle_publisher_with_resolver_and_status(
                                         None,
                                     )
                                     .await;
-                                    info!("Connected to new platform: {} (id={})", url, platform_id);
+                                    info!("Connected to new platform {}", platform_id);
                                     push_clients.push(pc);
                                 },
                                 _ => {
@@ -405,7 +412,7 @@ pub async fn handle_publisher_with_resolver_and_status(
                                         Some("destination connection failed".into()),
                                     )
                                     .await;
-                                    error!("Failed to connect to new platform: {}", url);
+                                    error!("Failed to connect to new platform {}", platform_id);
                                     spawn_destination_reconnect(
                                         &reconnect_tx,
                                         &reconnect_stop_rx,
@@ -546,7 +553,7 @@ pub async fn handle_publisher_with_resolver_and_status(
                                                         None,
                                                     )
                                                     .await;
-                                                    info!("Connected to platform: {} (id={})", p.url, pid);
+                                                    info!("Connected to platform {}", pid);
                                                     push_clients.push(pc);
                                                 },
                                                 _ => {
@@ -557,7 +564,7 @@ pub async fn handle_publisher_with_resolver_and_status(
                                                         Some("destination connection failed".into()),
                                                     )
                                                     .await;
-                                                    error!("Failed to connect to platform: {}", p.url);
+                                                    error!("Failed to connect to platform {}", pid);
                                                     spawn_destination_reconnect(
                                                         &reconnect_tx,
                                                         &reconnect_stop_rx,
@@ -688,6 +695,7 @@ async fn prime_push_client(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn spawn_destination_reconnect(
     reconnect_tx: &mpsc::Sender<(String, PushClient)>,
     reconnect_stop: &watch::Receiver<bool>,
@@ -813,6 +821,7 @@ async fn spawn_destination_reconnect(
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn forward_to_push_clients(
     push_clients: &mut [PushClient],
     reconnect_tx: &mpsc::Sender<(String, PushClient)>,

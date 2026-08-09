@@ -213,6 +213,16 @@ pub struct ServerInfo {
     pub hostname: String,
 }
 
+pub fn mask_secret(value: &str) -> String {
+    let characters = value.chars().collect::<Vec<_>>();
+    if characters.len() <= 8 {
+        return "****".into();
+    }
+    let prefix = characters.iter().take(4).collect::<String>();
+    let suffix = characters.iter().rev().take(4).rev().collect::<String>();
+    format!("{prefix}…{suffix}")
+}
+
 pub fn get_server_info(config_path: &Path) -> Result<ServerInfo, Box<dyn std::error::Error>> {
     let config = Config::from_file(config_path)?;
 
@@ -231,12 +241,7 @@ pub fn get_server_info(config_path: &Path) -> Result<ServerInfo, Box<dyn std::er
         .and_then(|value| value.parse().ok())
         .unwrap_or(3000);
 
-    let key = &config.stream_key;
-    let masked = if key.len() <= 4 {
-        "****".to_string()
-    } else {
-        format!("{}…{}", &key[..4], &key[key.len() - 4..])
-    };
+    let masked = mask_secret(&config.stream_key);
 
     let rtmp_url = format!("rtmp://{hostname}:{rtmp_port}");
     let rtmps_url = std::env::var("RESTREAM_RTMPS_URL")
@@ -450,6 +455,12 @@ pub fn write_config_file(path: &Path, contents: &str) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_mask_secret_is_safe_for_short_and_unicode_values() {
+        assert_eq!(mask_secret("secret"), "****");
+        assert_eq!(mask_secret("clave-secreta"), "clav…reta");
+    }
 
     #[test]
     fn test_is_first_run_no_file() {

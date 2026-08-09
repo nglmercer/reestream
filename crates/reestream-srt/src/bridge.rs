@@ -129,8 +129,8 @@ impl SrtBridge {
             }
         });
 
-        if let Some(ref rtmp_url) = self.config.rtmp_forward_url {
-            info!("SRT bridge forwarding to RTMP: {}", rtmp_url);
+        if self.config.rtmp_forward_url.is_some() {
+            info!("SRT bridge forwarding to the configured RTMP target");
         }
 
         listener.run().await?;

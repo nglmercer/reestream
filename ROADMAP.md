@@ -1,12 +1,12 @@
 # Reestream Roadmap
 
-## Current Status (v0.2.0, verified 2026-08-08)
+## Current Status (v0.2.0, verified 2026-08-09)
 
 | Metric | Value |
 |--------|-------|
 | Crates | 5 (core, ffmpeg, server, srt, root) |
 | Rust source files | 60 |
-| Tests | 403 (cargo test --workspace --all-features) |
+| Tests | 411 (cargo test --workspace --all-features) |
 | API routes | 130+ (legacy + `/api/v1`) |
 | Feature flags | 8 |
 | Dashboard components | 18 |
@@ -187,12 +187,12 @@ Options:
 
 | Module | Tests |
 |--------|------:|
-| reestream-core | 151 |
+| reestream-core | 153 |
 | reestream-ffmpeg | 33 |
-| reestream-server | 100 |
+| reestream-server | 106 |
 | reestream-srt | 28 |
 | reestream + root integration tests | 91 |
-| **Total** | **403** |
+| **Total** | **411** |
 
 ---
 

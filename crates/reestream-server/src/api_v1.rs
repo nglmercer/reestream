@@ -1157,6 +1157,9 @@ async fn oauth_token(
             "authorization_code".into()
         }
     });
+    if !matches!(grant_type.as_str(), "authorization_code" | "refresh_token") {
+        return bad_request("grantType must be authorization_code or refresh_token");
+    }
     if grant_type == "authorization_code" && request.code.is_none() {
         return bad_request("code is required for authorization_code exchange");
     }

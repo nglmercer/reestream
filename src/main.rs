@@ -70,6 +70,13 @@ async fn sync_product_platform(
                 if let Ok(url) = url::Url::parse(url) {
                     platform.url = url;
                 }
+            } else if *enabled && let Ok(url) = url::Url::parse(url) {
+                configured.push(reestream::config::Platform {
+                    url,
+                    key: key.clone(),
+                    enabled: true,
+                    orientation: Default::default(),
+                });
             }
         }
     }
@@ -248,8 +255,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(ref config_platforms) = *platform {
             for cp in config_platforms {
                 let name = cp.url.host_str().unwrap_or("unknown").to_string();
-                sm.add_platform(name, cp.url.to_string(), cp.key.clone())
+                let id = sm
+                    .add_platform(name, cp.url.to_string(), cp.key.clone())
                     .await;
+                if !cp.enabled {
+                    sm.toggle_platform(&id, false).await;
+                }
             }
         }
         // Restore API-managed destinations on startup and bridge future
