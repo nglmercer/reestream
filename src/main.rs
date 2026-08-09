@@ -375,18 +375,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                     }
 
-                                    if let Some(ref tx) = hls_tx {
-                                        if tx.try_send(flv_tag).is_err() {
-                                            transmuxer.stop().await;
-                                            match transmuxer.start().await {
-                                                Ok(new_tx) => {
-                                                    hls_tx = Some(new_tx);
-                                                    info!("HLS transmuxer restarted");
-                                                }
-                                                Err(e) => {
-                                                    warn!("Failed to restart HLS transmuxer: {e}");
-                                                    hls_tx = None;
-                                                }
+                                    if let Some(ref tx) = hls_tx
+                                        && tx.try_send(flv_tag).is_err()
+                                    {
+                                        transmuxer.stop().await;
+                                        match transmuxer.start().await {
+                                            Ok(new_tx) => {
+                                                hls_tx = Some(new_tx);
+                                                info!("HLS transmuxer restarted");
+                                            }
+                                            Err(e) => {
+                                                warn!("Failed to restart HLS transmuxer: {e}");
+                                                hls_tx = None;
                                             }
                                         }
                                     }

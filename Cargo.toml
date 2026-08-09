@@ -16,6 +16,11 @@ description = "RTMP multistream demuxer with HLS, FFmpeg, and web API"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/RustLangES/reestream"
 
+[[bin]]
+name = "reestream"
+path = "src/main.rs"
+required-features = ["core"]
+
 [features]
 default = ["core"]
 core = ["dep:reestream-core"]

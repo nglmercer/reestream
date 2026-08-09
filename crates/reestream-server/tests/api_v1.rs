@@ -210,6 +210,11 @@ async fn v1_private_aliases_and_official_event_subresources_are_available() {
     let (status, ingest) = json_response(&mut app, "GET", "/api/v1/user/ingest", None).await;
     assert_eq!(status, axum::http::StatusCode::OK);
     assert_eq!(ingest["data"]["ingestId"], "local");
+    assert!(
+        ingest["data"]["srtUrl"]
+            .as_str()
+            .is_some_and(|url| url.starts_with("srt://") && url.contains("streamid="))
+    );
 
     let (status, chat_url) = json_response(&mut app, "GET", "/api/v1/chat-url", None).await;
     assert_eq!(status, axum::http::StatusCode::OK);
@@ -225,6 +230,30 @@ async fn v1_private_aliases_and_official_event_subresources_are_available() {
     let event_id = event["data"]["id"].as_str().unwrap();
     assert_eq!(status, axum::http::StatusCode::CREATED);
 
+    let (status, srt_keys) = json_response(
+        &mut app,
+        "GET",
+        &format!("/api/v1/events/{event_id}/srt-keys"),
+        None,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(
+        srt_keys["data"]["primary"]["url"]
+            .as_str()
+            .is_some_and(|url| url.starts_with("srt://") && url.contains("streamid="))
+    );
+
+    let (status, recording_error) = json_response(
+        &mut app,
+        "POST",
+        &format!("/api/v1/events/{event_id}/recordings/start"),
+        None,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::CONFLICT);
+    assert_eq!(recording_error["error"]["code"], "event_not_live");
+
     let (status, recordings) = json_response(
         &mut app,
         "GET",
@@ -233,6 +262,7 @@ async fn v1_private_aliases_and_official_event_subresources_are_available() {
     )
     .await;
     assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(recordings["data"]["active"].is_null());
     assert!(recordings["data"]["primaryVideos"].is_array());
 
     let (status, viewers) = json_response(
