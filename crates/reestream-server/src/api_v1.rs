@@ -5,12 +5,16 @@
 //! explicit resource lifecycles, pagination-ready list responses, and a
 //! stable envelope.
 
+use crate::http::AppState;
+use crate::restream::{
+    Brand, Caption, Channel, EventStatus, QrCode, RestreamStore, StorageFile, StreamType, Ticker,
+    ingest_servers_for_url, is_valid_scheduled_for, now, platform_catalog,
+};
 use axum::{
     Json, Router,
     body::Body,
     extract::{
-        Multipart, Path, Query, State, WebSocketUpgrade,
-        multipart::Field,
+        Path, Query, State, WebSocketUpgrade,
         ws::{Message, WebSocket},
     },
     http::{HeaderMap, HeaderValue, Request, StatusCode, header},
@@ -20,14 +24,10 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use uuid::Uuid;
 
-use crate::http::AppState;
-use crate::restream::{
-    Brand, Caption, Channel, EventStatus, QrCode, RestreamStore, StorageFile, StreamType, Ticker,
-    WebhookSubscription, ingest_servers_for_url, is_valid_scheduled_for, now, platform_catalog,
-};
+mod storage;
+mod studio;
+mod webhooks;
 
 #[derive(Debug, Serialize)]
 struct Envelope<T: Serialize> {
@@ -257,46 +257,6 @@ async fn validate_destination_ids(store: &RestreamStore, ids: &[String]) -> Resu
         }
     }
     Ok(())
-}
-
-fn max_upload_bytes() -> u64 {
-    std::env::var("RESTREAM_MAX_UPLOAD_BYTES")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(2 * 1024 * 1024 * 1024)
-}
-
-async fn multipart_text(field: &mut Field<'_>, max_bytes: usize) -> Result<String, String> {
-    let mut value = Vec::new();
-    while let Some(chunk) = field.chunk().await.map_err(|error| error.to_string())? {
-        if value.len().saturating_add(chunk.len()) > max_bytes {
-            return Err(format!(
-                "multipart text field exceeds the {max_bytes} byte limit"
-            ));
-        }
-        value.extend_from_slice(&chunk);
-    }
-    String::from_utf8(value).map_err(|_| "multipart text field must be UTF-8".into())
-}
-
-fn safe_download_filename(value: &str) -> String {
-    let safe: String = value
-        .chars()
-        .take(200)
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if safe.is_empty() {
-        "download".into()
-    } else {
-        safe
-    }
 }
 
 #[allow(clippy::result_large_err)]
@@ -702,16 +662,27 @@ fn protected_routes(state: AppState) -> Router<AppState> {
         .route("/api/v1/recordings/{id}", delete(delete_product_recording))
         .route("/api/v1/analytics/overview", get(analytics_overview))
         .route("/api/v1/analytics/timeseries", get(analytics_timeseries))
-        .route("/api/v1/storage/files", get(list_files).post(upload_file))
-        .route("/api/v1/storage/metadata", post(create_storage_metadata))
+        .route(
+            "/api/v1/storage/files",
+            get(storage::list_files).post(storage::upload_file),
+        )
+        .route(
+            "/api/v1/storage/metadata",
+            post(storage::create_storage_metadata),
+        )
         .route(
             "/api/v1/storage/files/{id}",
-            get(get_file).patch(update_file).delete(delete_file),
+            get(storage::get_file)
+                .patch(storage::update_file)
+                .delete(storage::delete_file),
         )
-        .route("/api/v1/storage/files/{id}/download", get(download_file))
+        .route(
+            "/api/v1/storage/files/{id}/download",
+            get(storage::download_file),
+        )
         .route(
             "/api/v1/storage/files/{id}/download-url",
-            post(file_download_url),
+            post(storage::file_download_url),
         )
         .route("/api/v1/clips/projects", get(list_clips).post(create_clip))
         .route(
@@ -721,70 +692,94 @@ fn protected_routes(state: AppState) -> Router<AppState> {
         .route("/api/v1/clips/projects/{id}/download", get(download_clip))
         .route(
             "/api/v1/studio/sessions",
-            get(list_studio_sessions).post(create_studio_session),
+            get(studio::list_studio_sessions).post(studio::create_studio_session),
         )
         .route(
             "/api/v1/studio/sessions/{id}",
-            get(get_studio_session).patch(update_studio_session),
+            get(studio::get_studio_session).patch(studio::update_studio_session),
         )
         .route(
             "/api/v1/studio/sessions/{id}/start",
-            post(start_studio_session),
+            post(studio::start_studio_session),
         )
-        .route("/api/v1/studio/sessions/{id}/end", post(end_studio_session))
-        .route("/api/v1/studio/sessions/{id}/guests", post(add_guest))
+        .route(
+            "/api/v1/studio/sessions/{id}/end",
+            post(studio::end_studio_session),
+        )
+        .route(
+            "/api/v1/studio/sessions/{id}/guests",
+            post(studio::add_guest),
+        )
         .route(
             "/api/v1/studio/sessions/{id}/guests/{guest_id}",
-            delete(remove_guest),
+            delete(studio::remove_guest),
         )
-        .route("/api/v1/studio/sessions/{id}/scenes", post(add_scene))
+        .route(
+            "/api/v1/studio/sessions/{id}/scenes",
+            post(studio::add_scene),
+        )
         .route(
             "/api/v1/studio/sessions/{id}/scenes/{scene_id}",
-            patch(update_scene),
+            patch(studio::update_scene),
         )
-        .route("/api/v1/studio/brands", get(list_brands).post(create_brand))
+        .route(
+            "/api/v1/studio/brands",
+            get(studio::list_brands).post(studio::create_brand),
+        )
         .route(
             "/api/v1/studio/brands/{id}",
-            patch(update_brand).delete(delete_brand),
+            patch(studio::update_brand).delete(studio::delete_brand),
         )
         .route(
             "/api/v1/studio/captions",
-            get(list_captions).post(create_caption),
+            get(studio::list_captions).post(studio::create_caption),
         )
         .route(
             "/api/v1/studio/captions/{id}",
-            patch(update_caption).delete(delete_caption),
+            patch(studio::update_caption).delete(studio::delete_caption),
         )
         .route(
             "/api/v1/studio/qr-codes",
-            get(list_qr_codes).post(create_qr_code),
+            get(studio::list_qr_codes).post(studio::create_qr_code),
         )
         .route(
             "/api/v1/studio/qr-codes/{id}",
-            patch(update_qr_code).delete(delete_qr_code),
+            patch(studio::update_qr_code).delete(studio::delete_qr_code),
         )
-        .route("/api/v1/studio/qr-codes/reorder", patch(reorder_qr_codes))
+        .route(
+            "/api/v1/studio/qr-codes/reorder",
+            patch(studio::reorder_qr_codes),
+        )
         .route(
             "/api/v1/studio/tickers",
-            get(list_tickers).post(create_ticker),
+            get(studio::list_tickers).post(studio::create_ticker),
         )
         .route(
             "/api/v1/studio/tickers/{id}",
-            patch(update_ticker).delete(delete_ticker),
+            patch(studio::update_ticker).delete(studio::delete_ticker),
         )
-        .route("/api/v1/studio/tickers/reorder", patch(reorder_tickers))
-        .route("/api/v1/studio/fonts", get(list_fonts))
-        .route("/api/v1/studio/audio/countdown", get(list_countdown_audio))
+        .route(
+            "/api/v1/studio/tickers/reorder",
+            patch(studio::reorder_tickers),
+        )
+        .route("/api/v1/studio/fonts", get(studio::list_fonts))
+        .route(
+            "/api/v1/studio/audio/countdown",
+            get(studio::list_countdown_audio),
+        )
         .route(
             "/api/v1/studio/audio/backgrounds",
-            get(list_background_audio),
+            get(studio::list_background_audio),
         )
-        .route("/api/v1/webhooks", get(list_webhooks).post(create_webhook))
+        .route(
+            "/api/v1/webhooks",
+            get(webhooks::list_webhooks).post(webhooks::create_webhook),
+        )
         .route(
             "/api/v1/webhooks/{id}",
-            patch(update_webhook).delete(delete_webhook),
+            patch(webhooks::update_webhook).delete(webhooks::delete_webhook),
         )
-        .route("/api/v1/webhooks/{id}/test", post(test_webhook))
+        .route("/api/v1/webhooks/{id}/test", post(webhooks::test_webhook))
         .layer(middleware::from_fn_with_state(state, require_auth))
 }
 
@@ -2584,280 +2579,6 @@ async fn delete_product_recording(
     }
 }
 
-async fn list_files(State(state): State<AppState>, query: Query<ListQuery>) -> Response {
-    list(
-        state
-            .restream
-            .list_files(query.q.as_deref())
-            .await
-            .into_iter()
-            .map(public_file)
-            .collect(),
-        &query,
-    )
-}
-
-async fn upload_file(State(state): State<AppState>, mut multipart: Multipart) -> Response {
-    let mut name = None;
-    let mut mime_type = "application/octet-stream".to_string();
-    let mut labels = Vec::new();
-    let upload_id = Uuid::new_v4().to_string();
-    let temporary_path = state.restream.storage_path(&upload_id, "upload.part");
-    let mut total_bytes = 0u64;
-    let mut received_file = false;
-    loop {
-        let Some(mut field) = (match multipart.next_field().await {
-            Ok(field) => field,
-            Err(error) => {
-                let _ = tokio::fs::remove_file(&temporary_path).await;
-                return bad_request(format!("unable to read multipart upload: {error}"));
-            }
-        }) else {
-            break;
-        };
-        let field_name = field.name().unwrap_or_default().to_string();
-        if field_name == "file" {
-            if received_file {
-                let _ = tokio::fs::remove_file(&temporary_path).await;
-                return bad_request("only one file field is supported");
-            }
-            received_file = true;
-            if let Some(content_type) = field.content_type() {
-                mime_type = content_type.to_string();
-            }
-            if name.is_none() {
-                name = field.file_name().map(safe_download_filename);
-            }
-            if let Some(parent) = temporary_path.parent()
-                && let Err(io_error) = tokio::fs::create_dir_all(parent).await
-            {
-                let _ = tokio::fs::remove_file(&temporary_path).await;
-                return error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "storage_error",
-                    io_error.to_string(),
-                );
-            }
-            let mut file = match tokio::fs::File::create(&temporary_path).await {
-                Ok(file) => file,
-                Err(io_error) => {
-                    let _ = tokio::fs::remove_file(&temporary_path).await;
-                    return error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "storage_error",
-                        io_error.to_string(),
-                    );
-                }
-            };
-            loop {
-                match field.chunk().await {
-                    Ok(Some(chunk)) => {
-                        total_bytes = total_bytes.saturating_add(chunk.len() as u64);
-                        if total_bytes > max_upload_bytes() {
-                            let _ = tokio::fs::remove_file(&temporary_path).await;
-                            return error(
-                                StatusCode::PAYLOAD_TOO_LARGE,
-                                "upload_too_large",
-                                format!(
-                                    "file exceeds the {} byte upload limit",
-                                    max_upload_bytes()
-                                ),
-                            );
-                        }
-                        if let Err(io_error) = file.write_all(&chunk).await {
-                            let _ = tokio::fs::remove_file(&temporary_path).await;
-                            return error(
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                "storage_error",
-                                io_error.to_string(),
-                            );
-                        }
-                    }
-                    Ok(None) => break,
-                    Err(error) => {
-                        let _ = tokio::fs::remove_file(&temporary_path).await;
-                        return bad_request(format!("unable to read upload: {error}"));
-                    }
-                }
-            }
-        } else if field_name == "name" {
-            match multipart_text(&mut field, 255).await {
-                Ok(value) => name = Some(value),
-                Err(error) => {
-                    let _ = tokio::fs::remove_file(&temporary_path).await;
-                    return bad_request(format!("invalid name: {error}"));
-                }
-            }
-        } else if field_name == "labels"
-            && let Ok(value) = multipart_text(&mut field, 4096).await
-        {
-            labels = value
-                .split(',')
-                .map(str::trim)
-                .filter(|label| !label.is_empty())
-                .map(ToOwned::to_owned)
-                .collect();
-        }
-    }
-    let name = match name.filter(|value| !value.trim().is_empty()) {
-        Some(value) => value,
-        None => {
-            let _ = tokio::fs::remove_file(&temporary_path).await;
-            return bad_request("multipart field `file` is required");
-        }
-    };
-    if !received_file {
-        let _ = tokio::fs::remove_file(&temporary_path).await;
-        return bad_request("multipart field `file` is required");
-    }
-    let path = state.restream.storage_path(&upload_id, &name);
-    if let Err(io_error) = tokio::fs::rename(&temporary_path, &path).await {
-        let _ = tokio::fs::remove_file(&temporary_path).await;
-        return error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "storage_error",
-            io_error.to_string(),
-        );
-    }
-    let file = state
-        .restream
-        .create_file_metadata(
-            name,
-            mime_type,
-            total_bytes,
-            None,
-            labels,
-            path.to_string_lossy().into(),
-        )
-        .await;
-    created(public_file(file))
-}
-
-async fn create_storage_metadata(
-    State(state): State<AppState>,
-    Json(request): Json<CreateStorageMetadataRequest>,
-) -> Response {
-    let name = match required(&request.name, "name") {
-        Ok(value) => value,
-        Err(response) => return response,
-    };
-    if request.size_bytes.unwrap_or(0) > max_upload_bytes() {
-        return error(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "upload_too_large",
-            format!("file exceeds the {} byte upload limit", max_upload_bytes()),
-        );
-    }
-    let path = request.path.unwrap_or_default();
-    if !path.is_empty() && !state.restream.is_managed_storage_path(&path) {
-        return bad_request("path must point to an existing file inside the storage root");
-    }
-    let file = state
-        .restream
-        .create_file_metadata(
-            name,
-            request
-                .mime_type
-                .unwrap_or_else(|| "application/octet-stream".into()),
-            request.size_bytes.unwrap_or(0),
-            request.duration_seconds,
-            request.labels.unwrap_or_default(),
-            path,
-        )
-        .await;
-    created(public_file(file))
-}
-
-async fn get_file(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    match state.restream.get_file(&id).await {
-        Some(file) => ok(public_file(file)),
-        None => not_found("storage file"),
-    }
-}
-
-async fn update_file(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(request): Json<UpdateStorageRequest>,
-) -> Response {
-    match state
-        .restream
-        .update_file(&id, request.name, request.labels)
-        .await
-    {
-        Some(file) => ok(public_file(file)),
-        None => not_found("storage file"),
-    }
-}
-
-async fn delete_file(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    if state.restream.delete_file(&id).await.is_some() {
-        ok(json!({"deleted": true, "id": id}))
-    } else {
-        not_found("storage file")
-    }
-}
-
-async fn download_file(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    let Some(file) = state.restream.get_file(&id).await else {
-        return not_found("storage file");
-    };
-    if !state.restream.is_managed_storage_path(&file.path) {
-        return error(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "file_not_downloadable",
-            "file contents are not available in the local storage root",
-        );
-    }
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_str(&file.mime_type)
-            .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
-    );
-    if let Ok(value) = HeaderValue::from_str(&format!(
-        "attachment; filename=\"{}\"",
-        safe_download_filename(&file.name)
-    )) {
-        headers.insert(header::CONTENT_DISPOSITION, value);
-    }
-    let path = file.path.clone();
-    let stream = async_stream::stream! {
-        let mut input = match tokio::fs::File::open(path).await {
-            Ok(input) => input,
-            Err(error) => {
-                yield Err::<bytes::Bytes, std::io::Error>(error);
-                return;
-            }
-        };
-        let mut buffer = vec![0u8; 64 * 1024];
-        loop {
-            let read = match input.read(&mut buffer).await {
-                Ok(read) => read,
-                Err(error) => {
-                    yield Err::<bytes::Bytes, std::io::Error>(error);
-                    return;
-                }
-            };
-            if read == 0 {
-                break;
-            }
-            yield Ok::<bytes::Bytes, std::io::Error>(bytes::Bytes::copy_from_slice(&buffer[..read]));
-        }
-    };
-    (StatusCode::OK, headers, Body::from_stream(stream)).into_response()
-}
-
-async fn file_download_url(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    if state.restream.get_file(&id).await.is_none() {
-        return not_found("storage file");
-    }
-    let download_url = format!("/api/v1/storage/files/{id}/download");
-    ok(
-        json!({"url": download_url, "downloadUrl": format!("/api/v1/storage/files/{id}/download"), "expiresIn": 3600}),
-    )
-}
-
 async fn list_clips(State(state): State<AppState>, query: Query<ClipListQuery>) -> Response {
     ok(state.restream.list_clips(query.event_id.as_deref()).await)
 }
@@ -2904,7 +2625,7 @@ async fn download_clip(State(state): State<AppState>, Path(id): Path<String>) ->
         return not_found("clip project");
     };
     if let Some(file_id) = clip.output_file_id {
-        return download_file(State(state), Path(file_id)).await;
+        return storage::download_file(State(state), Path(file_id)).await;
     }
     if clip.status == "processing" {
         return error(
@@ -2918,609 +2639,6 @@ async fn download_clip(State(state): State<AppState>, Path(id): Path<String>) ->
         "clip_failed",
         "clip has no output file",
     )
-}
-
-async fn list_studio_sessions(State(state): State<AppState>) -> Response {
-    ok(state.restream.list_studio_sessions().await)
-}
-
-async fn create_studio_session(
-    State(state): State<AppState>,
-    Json(request): Json<StudioSessionRequest>,
-) -> Response {
-    match state
-        .restream
-        .get_or_create_studio_session(&request.event_id)
-        .await
-    {
-        Some(session) => {
-            if request.layout.is_some() || request.settings.is_some() {
-                let _ = state
-                    .restream
-                    .update_studio_session(&session.id, request.layout, request.settings, None)
-                    .await;
-            }
-            match state
-                .restream
-                .get_or_create_studio_session(&request.event_id)
-                .await
-            {
-                Some(session) => created(session),
-                None => not_found("event"),
-            }
-        }
-        None => not_found("event"),
-    }
-}
-
-async fn get_studio_session(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    match state
-        .restream
-        .list_studio_sessions()
-        .await
-        .into_iter()
-        .find(|session| session.id == id)
-    {
-        Some(session) => ok(session),
-        None => not_found("Studio session"),
-    }
-}
-
-async fn update_studio_session(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(request): Json<StudioSessionPatch>,
-) -> Response {
-    match state
-        .restream
-        .update_studio_session(&id, request.layout, request.settings, request.status)
-        .await
-    {
-        Some(session) => ok(session),
-        None => not_found("Studio session"),
-    }
-}
-
-async fn start_studio_session(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    let Some(session) = state
-        .restream
-        .list_studio_sessions()
-        .await
-        .into_iter()
-        .find(|session| session.id == id)
-    else {
-        return not_found("Studio session");
-    };
-    let Some(event) = state.restream.get_event(&session.event_id).await else {
-        return not_found("event");
-    };
-    let event = match state.restream.set_event_live(&event.id).await {
-        Some(event) => event,
-        None => {
-            return error(
-                StatusCode::CONFLICT,
-                "event_not_startable",
-                "event cannot go live",
-            );
-        }
-    };
-    let _ = start_event_recording(&state.recording_manager, &state.restream, &event).await;
-    if let Err(message) =
-        start_event_playback(&state.playback_manager, &state.restream, &event).await
-    {
-        finish_event_recording(&state.recording_manager, &state.restream, &event).await;
-        let _ = state.restream.cancel_event(&event.id).await;
-        return error(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "playback_unavailable",
-            message,
-        );
-    }
-    match state
-        .restream
-        .update_studio_session(&id, None, None, Some("live".into()))
-        .await
-    {
-        Some(session) => ok(session),
-        None => not_found("Studio session"),
-    }
-}
-
-async fn end_studio_session(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    let session = state
-        .restream
-        .list_studio_sessions()
-        .await
-        .into_iter()
-        .find(|session| session.id == id);
-    if let Some(session) = session
-        && let Some(event) = state.restream.end_event(&session.event_id).await
-    {
-        finish_event_recording(&state.recording_manager, &state.restream, &event).await;
-        finish_event_playback(&state.playback_manager, &event.id).await;
-    }
-    match state
-        .restream
-        .update_studio_session(&id, None, None, Some("ended".into()))
-        .await
-    {
-        Some(session) => ok(session),
-        None => not_found("Studio session"),
-    }
-}
-
-async fn add_guest(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(request): Json<GuestRequest>,
-) -> Response {
-    match state
-        .restream
-        .add_guest(
-            &id,
-            request.name,
-            request.role.unwrap_or_else(|| "guest".into()),
-        )
-        .await
-    {
-        Some(guest) => created(guest),
-        None => not_found("Studio session"),
-    }
-}
-
-async fn remove_guest(
-    State(state): State<AppState>,
-    Path((id, guest_id)): Path<(String, String)>,
-) -> Response {
-    if state.restream.remove_guest(&id, &guest_id).await {
-        ok(json!({"deleted": true, "id": guest_id}))
-    } else {
-        not_found("guest")
-    }
-}
-
-async fn add_scene(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(request): Json<SceneRequest>,
-) -> Response {
-    match state
-        .restream
-        .add_scene(
-            &id,
-            request.name,
-            request.layout.unwrap_or_else(|| "grid".into()),
-            request.source_ids.unwrap_or_default(),
-        )
-        .await
-    {
-        Some(scene) => created(scene),
-        None => not_found("Studio session"),
-    }
-}
-
-async fn update_scene(
-    State(state): State<AppState>,
-    Path((id, scene_id)): Path<(String, String)>,
-    Json(request): Json<ScenePatch>,
-) -> Response {
-    match state
-        .restream
-        .update_scene(
-            &id,
-            &scene_id,
-            request.name,
-            request.layout,
-            request.source_ids,
-            request.active,
-        )
-        .await
-    {
-        Some(scene) => ok(scene),
-        None => not_found("scene"),
-    }
-}
-
-fn brand_from_value(value: Value) -> Brand {
-    let timestamp = now();
-    Brand {
-        id: String::new(),
-        name: value
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or("New brand")
-            .into(),
-        logo_url: value.get("logoUrl").and_then(Value::as_str).map(Into::into),
-        primary_color: value
-            .get("primaryColor")
-            .and_then(Value::as_str)
-            .unwrap_or("#ffffff")
-            .into(),
-        secondary_color: value
-            .get("secondaryColor")
-            .and_then(Value::as_str)
-            .unwrap_or("#000000")
-            .into(),
-        font_family: value
-            .get("fontFamily")
-            .and_then(Value::as_str)
-            .unwrap_or("Inter")
-            .into(),
-        created_at: timestamp,
-        updated_at: timestamp,
-    }
-}
-
-async fn list_brands(State(state): State<AppState>) -> Response {
-    ok(state.restream.list_brands().await)
-}
-
-async fn create_brand(State(state): State<AppState>, Json(value): Json<Value>) -> Response {
-    created(state.restream.create_brand(brand_from_value(value)).await)
-}
-
-async fn update_brand(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(value): Json<Value>,
-) -> Response {
-    match state.restream.update_brand(&id, value).await {
-        Some(brand) => ok(brand),
-        None => not_found("brand"),
-    }
-}
-
-async fn delete_brand(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    if state.restream.delete_brand(&id).await {
-        ok(json!({"deleted": true, "id": id}))
-    } else {
-        not_found("brand")
-    }
-}
-
-fn caption_from_value(value: Value) -> Caption {
-    let timestamp = now();
-    Caption {
-        id: String::new(),
-        name: value
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or("Captions")
-            .into(),
-        language: value
-            .get("language")
-            .and_then(Value::as_str)
-            .unwrap_or("en")
-            .into(),
-        style: value.get("style").cloned().unwrap_or_else(|| json!({})),
-        enabled: value
-            .get("enabled")
-            .and_then(Value::as_bool)
-            .unwrap_or(true),
-        created_at: timestamp,
-        updated_at: timestamp,
-    }
-}
-
-async fn list_captions(State(state): State<AppState>) -> Response {
-    ok(state.restream.list_captions().await)
-}
-
-async fn create_caption(State(state): State<AppState>, Json(value): Json<Value>) -> Response {
-    created(
-        state
-            .restream
-            .create_caption(caption_from_value(value))
-            .await,
-    )
-}
-
-async fn update_caption(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(value): Json<Value>,
-) -> Response {
-    match state.restream.update_caption(&id, value).await {
-        Some(caption) => ok(caption),
-        None => not_found("caption"),
-    }
-}
-
-async fn delete_caption(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    if state.restream.delete_caption(&id).await {
-        ok(json!({"deleted": true, "id": id}))
-    } else {
-        not_found("caption")
-    }
-}
-
-fn qr_from_value(value: Value) -> QrCode {
-    let timestamp = now();
-    QrCode {
-        id: String::new(),
-        name: value
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or("QR code")
-            .into(),
-        data: value
-            .get("data")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .into(),
-        foreground: value
-            .get("foreground")
-            .and_then(Value::as_str)
-            .unwrap_or("#000000")
-            .into(),
-        background: value
-            .get("background")
-            .and_then(Value::as_str)
-            .unwrap_or("#ffffff")
-            .into(),
-        enabled: value
-            .get("enabled")
-            .and_then(Value::as_bool)
-            .unwrap_or(true),
-        position: value
-            .get("position")
-            .and_then(Value::as_str)
-            .unwrap_or("bottom-right")
-            .into(),
-        created_at: timestamp,
-        updated_at: timestamp,
-    }
-}
-
-async fn list_qr_codes(State(state): State<AppState>) -> Response {
-    ok(state.restream.list_qr_codes().await)
-}
-
-async fn create_qr_code(State(state): State<AppState>, Json(value): Json<Value>) -> Response {
-    created(state.restream.create_qr_code(qr_from_value(value)).await)
-}
-
-async fn update_qr_code(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(value): Json<Value>,
-) -> Response {
-    match state.restream.update_qr_code(&id, value).await {
-        Some(qr_code) => ok(qr_code),
-        None => not_found("QR code"),
-    }
-}
-
-async fn delete_qr_code(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    if state.restream.delete_qr_code(&id).await {
-        ok(json!({"deleted": true, "id": id}))
-    } else {
-        not_found("QR code")
-    }
-}
-
-async fn reorder_qr_codes(
-    State(state): State<AppState>,
-    Json(request): Json<ReorderRequest>,
-) -> Response {
-    ok(state.restream.reorder_qr_codes(&request.ids).await)
-}
-
-fn ticker_from_value(value: Value) -> Ticker {
-    let timestamp = now();
-    Ticker {
-        id: String::new(),
-        text: value
-            .get("text")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .into(),
-        speed: value.get("speed").and_then(Value::as_u64).unwrap_or(40) as u32,
-        color: value
-            .get("color")
-            .and_then(Value::as_str)
-            .unwrap_or("#ffffff")
-            .into(),
-        background_color: value
-            .get("backgroundColor")
-            .and_then(Value::as_str)
-            .unwrap_or("#000000")
-            .into(),
-        enabled: value
-            .get("enabled")
-            .and_then(Value::as_bool)
-            .unwrap_or(true),
-        order: value.get("order").and_then(Value::as_u64).unwrap_or(0) as u32,
-        created_at: timestamp,
-        updated_at: timestamp,
-    }
-}
-
-async fn list_tickers(State(state): State<AppState>) -> Response {
-    ok(state.restream.list_tickers().await)
-}
-
-async fn create_ticker(State(state): State<AppState>, Json(value): Json<Value>) -> Response {
-    created(state.restream.create_ticker(ticker_from_value(value)).await)
-}
-
-async fn update_ticker(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(value): Json<Value>,
-) -> Response {
-    match state.restream.update_ticker(&id, value).await {
-        Some(ticker) => ok(ticker),
-        None => not_found("ticker"),
-    }
-}
-
-async fn delete_ticker(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    if state.restream.delete_ticker(&id).await {
-        ok(json!({"deleted": true, "id": id}))
-    } else {
-        not_found("ticker")
-    }
-}
-
-async fn reorder_tickers(
-    State(state): State<AppState>,
-    Json(request): Json<ReorderRequest>,
-) -> Response {
-    ok(state.restream.reorder_tickers(&request.ids).await)
-}
-
-async fn list_fonts() -> Response {
-    ok(vec!["Inter", "Roboto", "Open Sans", "Montserrat", "Arial"])
-}
-
-async fn list_countdown_audio(State(state): State<AppState>) -> Response {
-    let files = state
-        .restream
-        .list_files(None)
-        .await
-        .into_iter()
-        .filter(|file| {
-            file.labels
-                .iter()
-                .any(|label| label.eq_ignore_ascii_case("countdown"))
-        })
-        .map(public_file)
-        .collect::<Vec<_>>();
-    ok(files)
-}
-
-async fn list_background_audio(State(state): State<AppState>) -> Response {
-    let files = state
-        .restream
-        .list_files(None)
-        .await
-        .into_iter()
-        .filter(|file| {
-            file.labels
-                .iter()
-                .any(|label| label.eq_ignore_ascii_case("background"))
-        })
-        .map(public_file)
-        .collect::<Vec<_>>();
-    ok(files)
-}
-
-fn webhook_from_request(request: WebhookRequest) -> WebhookSubscription {
-    WebhookSubscription {
-        id: String::new(),
-        url: request.url.unwrap_or_default(),
-        secret: request.secret,
-        events: request
-            .events
-            .unwrap_or_else(|| vec!["event.started".into(), "event.ended".into()]),
-        enabled: request.enabled.unwrap_or(true),
-        created_at: 0,
-        updated_at: 0,
-    }
-}
-
-async fn list_webhooks(State(state): State<AppState>) -> Response {
-    let hooks = state.restream.list_webhooks().await;
-    ok(hooks
-        .into_iter()
-        .map(|hook| {
-            json!({"id": hook.id, "url": hook.url, "events": hook.events, "enabled": hook.enabled, "createdAt": hook.created_at, "updatedAt": hook.updated_at})
-        })
-        .collect::<Vec<_>>())
-}
-
-async fn create_webhook(
-    State(state): State<AppState>,
-    Json(request): Json<WebhookRequest>,
-) -> Response {
-    let Some(url) = request.url.as_deref() else {
-        return bad_request("url is required");
-    };
-    if let Err(response) = parse_http_url(url, "url") {
-        return response;
-    }
-    let hook = state
-        .restream
-        .create_webhook(webhook_from_request(request))
-        .await;
-    ok(
-        json!({"id": hook.id, "url": hook.url, "events": hook.events, "enabled": hook.enabled, "createdAt": hook.created_at, "updatedAt": hook.updated_at}),
-    )
-}
-
-async fn update_webhook(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(request): Json<WebhookRequest>,
-) -> Response {
-    if let Some(ref url) = request.url
-        && let Err(response) = parse_http_url(url, "url")
-    {
-        return response;
-    }
-    match state
-        .restream
-        .update_webhook(
-            &id,
-            request.url,
-            request.secret,
-            request.events,
-            request.enabled,
-        )
-        .await
-    {
-        Some(hook) => ok(
-            json!({"id": hook.id, "url": hook.url, "events": hook.events, "enabled": hook.enabled, "createdAt": hook.created_at, "updatedAt": hook.updated_at}),
-        ),
-        None => not_found("webhook"),
-    }
-}
-
-async fn delete_webhook(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    if state.restream.delete_webhook(&id).await {
-        ok(json!({"deleted": true, "id": id}))
-    } else {
-        not_found("webhook")
-    }
-}
-
-async fn test_webhook(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    let hook = state
-        .restream
-        .list_webhooks()
-        .await
-        .into_iter()
-        .find(|hook| hook.id == id);
-    let Some(hook) = hook else {
-        return not_found("webhook");
-    };
-    let payload = json!({"event": "webhook.test", "timestamp": now(), "data": {"healthy": true}});
-    let client = match crate::restream::build_safe_http_client(
-        &hook.url,
-        std::time::Duration::from_secs(10),
-    )
-    .await
-    {
-        Ok(client) => client,
-        Err(client_error) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "webhook_client",
-                client_error.to_string(),
-            );
-        }
-    };
-    match client.post(&hook.url).json(&payload).send().await {
-        Ok(response) => ok(
-            json!({"delivered": response.status().is_success(), "status": response.status().as_u16()}),
-        ),
-        Err(request_error) => error(
-            StatusCode::BAD_GATEWAY,
-            "webhook_failed",
-            request_error.to_string(),
-        ),
-    }
 }
 
 fn openapi_document() -> Value {

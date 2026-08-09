@@ -599,13 +599,14 @@ fn run_setup(config_path: &std::path::Path) -> Result<(), Box<dyn std::error::Er
     Ok(())
 }
 
-fn configured_ffmpeg_path(config_path: &std::path::Path) -> PathBuf {
+#[cfg(any(feature = "hls", feature = "api"))]
+fn configured_ffmpeg_path(_config_path: &std::path::Path) -> PathBuf {
     if let Some(path) = std::env::var_os("RESTREAM_FFMPEG_PATH") {
         return PathBuf::from(path);
     }
     #[cfg(feature = "ffmpeg")]
     {
-        let data_dir = config_path
+        let data_dir = _config_path
             .parent()
             .unwrap_or_else(|| std::path::Path::new("."))
             .join(".reestream");
@@ -617,6 +618,7 @@ fn configured_ffmpeg_path(config_path: &std::path::Path) -> PathBuf {
     PathBuf::from("ffmpeg")
 }
 
+#[cfg(any(feature = "hls", feature = "api"))]
 fn configured_http_endpoint() -> (String, u16) {
     let addr = std::env::var("RESTREAM_HTTP_ADDR").unwrap_or_else(|_| "0.0.0.0".into());
     let port = std::env::var("RESTREAM_HTTP_PORT")
