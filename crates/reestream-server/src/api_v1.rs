@@ -887,25 +887,23 @@ async fn save_setup(
             .collect(),
     };
 
-    match reestream_core::setup::apply_setup(&state.config_path, &request) {
-        Ok(config) => {
-            state
-                .restream
-                .set_runtime_stream_key(config.stream_key.clone())
-                .await;
-            state
-                .restream
-                .set_runtime_platforms(config.platform.clone().unwrap_or_default())
-                .await;
-            ok(json!({
-                "rtmpAddr": config.rtmp_addr,
-                "rtmpPort": config.rtmp_port,
-                "platformCount": config.platform.as_ref().map_or(0, Vec::len),
-                "restartRequired": true,
-            }))
-        }
-        Err(error) => bad_request(format!("setup failed: {error}")),
-    }
+    let config = match reestream_core::setup::apply_setup(&state.config_path, &request) {
+        Ok(config) => config,
+        Err(error) => return bad_request(format!("setup failed: {error}")),
+    };
+    let rtmp_addr = config.rtmp_addr.clone();
+    let rtmp_port = config.rtmp_port;
+    let platform_count = config.platform.as_ref().map_or(0, Vec::len);
+    let stream_key = config.stream_key.clone();
+    let platforms = config.platform.unwrap_or_default();
+    state.restream.set_runtime_stream_key(stream_key).await;
+    state.restream.set_runtime_platforms(platforms).await;
+    ok(json!({
+        "rtmpAddr": rtmp_addr,
+        "rtmpPort": rtmp_port,
+        "platformCount": platform_count,
+        "restartRequired": true,
+    }))
 }
 
 async fn openapi() -> Response {

@@ -1148,9 +1148,10 @@ impl RestreamStore {
     }
 
     pub async fn set_runtime_platforms(&self, platforms: Vec<Platform>) {
-        if let Some(runtime_platforms) = &self.runtime_platforms {
-            *runtime_platforms.write().await = platforms;
-        }
+        let Some(runtime_platforms) = self.runtime_platforms.clone() else {
+            return;
+        };
+        *runtime_platforms.write().await = platforms;
     }
 
     pub async fn set_channel_status(
