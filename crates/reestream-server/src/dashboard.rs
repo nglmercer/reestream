@@ -1,11 +1,15 @@
-use axum::{extract::Path, http::StatusCode, response::IntoResponse};
+use axum::{
+    extract::Path,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
 use rust_embed::RustEmbed;
 
 #[derive(RustEmbed)]
 #[folder = "static"]
 struct DashboardAssets;
 
-pub async fn serve_index() -> impl IntoResponse {
+fn index_response() -> Response {
     match DashboardAssets::get("index.html") {
         Some(content) => {
             let body = String::from_utf8_lossy(content.data.as_ref()).to_string();
@@ -20,6 +24,10 @@ pub async fn serve_index() -> impl IntoResponse {
     }
 }
 
+pub async fn serve_index() -> Response {
+    index_response()
+}
+
 pub async fn serve_assets(Path(path): Path<String>) -> impl IntoResponse {
     let full_path = format!("assets/{path}");
     match DashboardAssets::get(&full_path) {
@@ -32,15 +40,23 @@ pub async fn serve_assets(Path(path): Path<String>) -> impl IntoResponse {
     }
 }
 
-pub async fn serve_static(Path(path): Path<String>) -> impl IntoResponse {
+pub async fn serve_static(Path(path): Path<String>) -> Response {
     match DashboardAssets::get(&path) {
         Some(content) => {
             let mime = mime_guess(&path);
             let body = content.data.to_vec();
             (StatusCode::OK, [("content-type", mime)], body).into_response()
         }
+        None if is_spa_route(&path) => index_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+fn is_spa_route(path: &str) -> bool {
+    !path.contains('.')
+        && !path.starts_with("api/")
+        && !path.starts_with("ws/")
+        && !path.starts_with("hls/")
 }
 
 pub async fn serve_favicon() -> impl IntoResponse {
@@ -95,5 +111,13 @@ mod tests {
     #[test]
     fn test_mime_guess_unknown() {
         assert_eq!(mime_guess("file.xyz"), "application/octet-stream");
+    }
+
+    #[test]
+    fn test_spa_route_detection() {
+        assert!(is_spa_route("home"));
+        assert!(is_spa_route("shows/stream-1"));
+        assert!(!is_spa_route("api/unknown"));
+        assert!(!is_spa_route("index.js"));
     }
 }

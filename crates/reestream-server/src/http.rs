@@ -687,7 +687,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/setup", get(dashboard::serve_index))
         .route("/assets/{*path}", get(dashboard::serve_assets))
         .route("/favicon.svg", get(dashboard::serve_favicon))
-        .route("/{path}", get(dashboard::serve_static))
+        .route("/{*path}", get(dashboard::serve_static))
         .route("/ws/streams", get(ws_streams))
         .route("/api/status", get(status))
         .route("/api/streams", get(list_streams).post(add_stream))
@@ -967,5 +967,31 @@ mod tests {
                 .unwrap(),
             "text/html; charset=utf-8"
         );
+    }
+
+    #[tokio::test]
+    async fn test_dashboard_routes_support_spa_refreshes() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        for path in ["/home", "/shows/stream-1"] {
+            let response = create_router(test_state())
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+
+            assert_eq!(response.status(), StatusCode::OK, "route {path}");
+            assert_eq!(
+                response
+                    .headers()
+                    .get("content-type")
+                    .unwrap()
+                    .to_str()
+                    .unwrap(),
+                "text/html; charset=utf-8",
+                "route {path}"
+            );
+        }
     }
 }

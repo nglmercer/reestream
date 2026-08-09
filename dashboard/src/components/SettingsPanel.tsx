@@ -117,8 +117,8 @@ export function SettingsPanel({ onClose, addLog }: Props) {
 
   if (loading) {
     return (
-      <div class="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'var(--overlay)' }}>
-        <div class="bg-surface-alt border border-border rounded-2xl p-8">
+      <div class="settings-overlay fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'var(--overlay)' }}>
+        <div class="settings-card bg-surface-alt border border-border rounded-2xl p-8">
           <div class="text-fg-muted animate-pulse">{t('settings.loading')}</div>
         </div>
       </div>
@@ -139,9 +139,9 @@ export function SettingsPanel({ onClose, addLog }: Props) {
     : [];
 
   return (
-    <div class="fixed inset-0 flex items-center justify-center z-50 p-4" style={{ backgroundColor: 'var(--overlay)' }} onClick={onClose}>
+    <div class="settings-overlay fixed inset-0 flex items-center justify-center z-50 p-4" style={{ backgroundColor: 'var(--overlay)' }} onClick={onClose}>
       <div
-        class="bg-surface-alt border border-border rounded-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto"
+        class="settings-card bg-surface-alt border border-border rounded-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div class="flex items-center justify-between px-6 py-4 border-b border-border sticky top-0 bg-surface-alt z-10">

@@ -508,6 +508,39 @@ export class ReestreamApiV1 {
     });
   }
 
+  updateEvent(
+    id: string,
+    request: {
+      title?: string;
+      description?: string;
+      scheduledFor?: string | null;
+      destinationIds?: string[];
+    },
+  ): Promise<Event> {
+    return this.request<Event>(`/events/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(request),
+    });
+  }
+
+  deleteEvent(id: string): Promise<{ deleted: boolean; id: string }> {
+    return this.request(`/events/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  addEventDestination(eventId: string, channelId: string): Promise<Event> {
+    return this.request<Event>(`/events/${encodeURIComponent(eventId)}/destinations`, {
+      method: 'POST',
+      body: JSON.stringify({ channelId }),
+    });
+  }
+
+  removeEventDestination(eventId: string, channelId: string): Promise<Event> {
+    return this.request<Event>(
+      `/events/${encodeURIComponent(eventId)}/destinations/${encodeURIComponent(channelId)}`,
+      { method: 'DELETE' },
+    );
+  }
+
   getEvent(id: string): Promise<Event> {
     return this.request<Event>(`/events/${id}`);
   }

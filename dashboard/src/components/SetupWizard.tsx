@@ -37,7 +37,7 @@ export function SetupWizard() {
       .getSetupStatus()
       .then((status: V1SetupStatus) => {
         if (active && !status.firstRun) {
-          window.location.href = '/';
+          window.location.href = '/home';
         }
       })
       .catch(() => {});
@@ -99,8 +99,8 @@ export function SetupWizard() {
   const canSave = streamKey.length > 0;
 
   return (
-    <div class="min-h-screen bg-surface flex items-center justify-center p-4">
-      <div class="w-full max-w-2xl">
+    <div class="setup-shell min-h-screen bg-surface flex items-center justify-center p-4">
+      <div class="setup-frame w-full max-w-2xl">
         <div class="flex items-center justify-center gap-2 mb-8">
           {(['welcome', 'server', 'platforms', 'confirm'] as Step[]).map((s, i) => {
             const steps: Step[] = ['welcome', 'server', 'platforms', 'confirm'];
@@ -126,7 +126,7 @@ export function SetupWizard() {
           })}
         </div>
 
-        <div class="bg-surface-alt border border-border rounded-2xl p-8">
+        <div class="setup-card bg-surface-alt border border-border rounded-2xl p-8">
           {step === 'welcome' && (
             <div class="text-center">
               <div class="w-16 h-16 mx-auto mb-4 rounded-2xl flex items-center justify-center" style={{ backgroundColor: 'var(--accent-bg)' }}>
@@ -372,7 +372,7 @@ export function SetupWizard() {
                 reestream --config config.toml
               </code>
               <a
-                href="/"
+                href="/home"
                 class="inline-block px-6 py-2.5 bg-accent hover:bg-accent-hover text-white rounded-lg font-medium transition-colors"
               >
                 {t('setup.openDashboard')}
