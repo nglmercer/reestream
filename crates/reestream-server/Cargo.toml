@@ -17,7 +17,8 @@ api = ["hls"]
 async-stream = "0.3"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["multipart", "ws"] }
-bytes = "1.10"
+aes-gcm = "0.10"
+bytes = "1.11.1"
 futures-util = "0.3"
 hmac = "0.12"
 reestream-core = { path = "../reestream-core" }

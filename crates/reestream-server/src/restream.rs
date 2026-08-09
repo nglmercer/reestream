@@ -6,18 +6,21 @@
 //! events, chat, analytics, and assets.  This store is the small local
 //! control-plane database for those resources.
 
+use aes_gcm::{Aes256Gcm, Nonce, aead::{Aead, KeyInit}};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::Sha256;
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::sync::{RwLock, broadcast};
+use std::time::Duration;
+use tokio::sync::{Mutex, RwLock, broadcast};
 use tracing::warn;
 use uuid::Uuid;
 
-use reestream_core::config::{PlatformEvent, platform_id_from};
+use reestream_core::config::{Platform, PlatformEvent, platform_id_from};
 
 pub fn now() -> u64 {
     std::time::SystemTime::now()
@@ -182,9 +185,6 @@ pub fn platform_catalog() -> Vec<PlatformCatalogEntry> {
         platform("rumble", "Rumble", "rumble", "https://rumble.com", true),
         platform("discord", "Discord", "discord", "https://discord.com", true),
         platform("custom-rtmp", "Custom RTMP", "custom-rtmp", "", false),
-        platform("custom-srt", "Custom SRT", "custom-srt", "", false),
-        platform("custom-whip", "Custom WHIP", "custom-whip", "", false),
-        platform("custom-hls", "Custom HLS", "custom-hls", "", false),
     ]
 }
 
@@ -201,12 +201,16 @@ pub struct IngestServer {
 }
 
 pub fn ingest_servers() -> Vec<IngestServer> {
+    ingest_servers_for_url("rtmp://localhost:1935/live")
+}
+
+pub fn ingest_servers_for_url(rtmp_url: &str) -> Vec<IngestServer> {
     vec![
         IngestServer {
             id: "autodetect".into(),
             name: "Autodetect".into(),
             url: "localhost".into(),
-            rtmp_url: "rtmp://localhost:1935/live".into(),
+            rtmp_url: rtmp_url.into(),
             latitude: 0.0,
             longitude: 0.0,
             recommended: true,
@@ -215,7 +219,7 @@ pub fn ingest_servers() -> Vec<IngestServer> {
             id: "local".into(),
             name: "Local Reestream".into(),
             url: "localhost".into(),
-            rtmp_url: "rtmp://localhost:1935/live".into(),
+            rtmp_url: rtmp_url.into(),
             latitude: 0.0,
             longitude: 0.0,
             recommended: true,
@@ -557,6 +561,13 @@ struct AuthSession {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+struct LoginThrottle {
+    failures: u8,
+    blocked_until: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 struct ChannelSecret {
     stream_key: String,
     rtmp_username: Option<String>,
@@ -610,16 +621,16 @@ pub struct EventNotification {
 #[serde(default)]
 struct RestreamData {
     channels: Vec<Channel>,
-    #[serde(default)]
+    #[serde(skip)]
     channel_secrets: HashMap<String, ChannelSecret>,
     drafts: Vec<Draft>,
     events: Vec<Event>,
-    #[serde(default)]
+    #[serde(skip)]
     event_stream_keys: HashMap<String, String>,
     files: Vec<StorageFile>,
     #[serde(default)]
     transcriptions: Vec<Transcription>,
-    #[serde(default)]
+    #[serde(skip)]
     oauth_connections: Vec<OAuthConnection>,
     chat: Vec<ChatMessage>,
     viewer_samples: Vec<ViewerSample>,
@@ -631,6 +642,7 @@ struct RestreamData {
     tickers: Vec<Ticker>,
     webhooks: Vec<WebhookSubscription>,
     profile: Profile,
+    #[serde(skip)]
     sessions: Vec<AuthSession>,
 }
 
@@ -674,32 +686,244 @@ impl Default for RestreamData {
 struct AuthConfig {
     required: bool,
     email: String,
-    password: String,
+    password: Option<String>,
 }
 
 impl AuthConfig {
     fn from_env() -> Self {
-        let required = std::env::var("RESTREAM_AUTH_REQUIRED")
+        let explicit_required = std::env::var("RESTREAM_AUTH_REQUIRED")
             .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
-            .unwrap_or(false)
-            || std::env::var("RESTREAM_ADMIN_PASSWORD").is_ok();
+            .unwrap_or(false);
+        let password = std::env::var("RESTREAM_ADMIN_PASSWORD")
+            .ok()
+            .filter(|value| !value.trim().is_empty());
+        let required = explicit_required || password.is_some();
         Self {
             required,
             email: std::env::var("RESTREAM_ADMIN_EMAIL")
                 .unwrap_or_else(|_| "admin@localhost".into()),
-            password: std::env::var("RESTREAM_ADMIN_PASSWORD").unwrap_or_else(|_| "admin".into()),
+            password,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeIngestConfig {
+    pub listen_addr: String,
+    pub listen_port: u16,
+    pub advertised_host: String,
+    pub stream_key: String,
+}
+
+impl Default for RuntimeIngestConfig {
+    fn default() -> Self {
+        Self {
+            listen_addr: "0.0.0.0".into(),
+            listen_port: 1935,
+            advertised_host: std::env::var("RESTREAM_PUBLIC_HOST")
+                .unwrap_or_else(|_| "localhost".into()),
+            stream_key: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct SensitiveState {
+    channel_secrets: HashMap<String, ChannelSecret>,
+    event_stream_keys: HashMap<String, String>,
+    oauth_connections: Vec<OAuthConnection>,
+    webhook_secrets: HashMap<String, String>,
+}
+
+fn decode_hex_key(value: &str) -> Option<[u8; 32]> {
+    let value = value.trim();
+    if value.len() != 64 {
+        return None;
+    }
+    let mut key = [0u8; 32];
+    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+        key[index] = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
+    }
+    Some(key)
+}
+
+fn load_or_create_state_key(path: &Path) -> Option<Arc<[u8; 32]>> {
+    if let Ok(value) = std::env::var("RESTREAM_STATE_KEY") {
+        if let Some(key) = decode_hex_key(&value) {
+            return Some(Arc::new(key));
+        }
+        warn!("RESTREAM_STATE_KEY must contain exactly 64 hexadecimal characters");
+        return None;
+    }
+
+    let key_path = path.with_extension("key");
+    if let Ok(key) = std::fs::read(&key_path) {
+        if key.len() == 32 {
+            let mut bytes = [0u8; 32];
+            bytes.copy_from_slice(&key);
+            return Some(Arc::new(bytes));
+        }
+        warn!(path = %key_path.display(), "ignoring invalid Reestream state key file");
+    }
+
+    let mut key = [0u8; 32];
+    key[..16].copy_from_slice(Uuid::new_v4().as_bytes());
+    key[16..].copy_from_slice(Uuid::new_v4().as_bytes());
+    if let Err(error) = atomic_write(&key_path, &key, 0o600) {
+        warn!(path = %key_path.display(), %error, "failed to create Reestream state key");
+        return None;
+    }
+    Some(Arc::new(key))
+}
+
+fn load_state(path: Option<&Path>) -> (RestreamData, Option<SensitiveState>) {
+    let Some(path) = path else {
+        return (RestreamData::default(), None);
+    };
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return (RestreamData::default(), None);
+        }
+        Err(error) => {
+            warn!(path = %path.display(), %error, "failed to read Reestream state; using empty state");
+            return (RestreamData::default(), None);
+        }
+    };
+    let raw: Value = match serde_json::from_str(&contents) {
+        Ok(value) => value,
+        Err(error) => {
+            warn!(path = %path.display(), %error, "Reestream state is invalid; preserving it and using empty state");
+            let backup = path.with_extension(format!("corrupt.{}", now()));
+            let _ = std::fs::rename(path, backup);
+            return (RestreamData::default(), None);
+        }
+    };
+    let data = match serde_json::from_value(raw.clone()) {
+        Ok(data) => data,
+        Err(error) => {
+            warn!(path = %path.display(), %error, "Reestream state could not be decoded; preserving it and using empty state");
+            let backup = path.with_extension(format!("invalid.{}", now()));
+            let _ = std::fs::rename(path, backup);
+            return (RestreamData::default(), None);
+        }
+    };
+
+    // Older releases stored secrets directly in the main JSON file.  Read
+    // them once so the next mutation can migrate them to the encrypted sidecar.
+    let legacy = SensitiveState {
+        channel_secrets: raw
+            .get("channel_secrets")
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .unwrap_or_default(),
+        event_stream_keys: raw
+            .get("event_stream_keys")
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .unwrap_or_default(),
+        oauth_connections: raw
+            .get("oauth_connections")
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .unwrap_or_default(),
+        webhook_secrets: HashMap::new(),
+    };
+    let has_legacy = !legacy.channel_secrets.is_empty()
+        || !legacy.event_stream_keys.is_empty()
+        || !legacy.oauth_connections.is_empty();
+    (data, has_legacy.then_some(legacy))
+}
+
+fn apply_sensitive_state(data: &mut RestreamData, sensitive: SensitiveState) {
+    data.channel_secrets = sensitive.channel_secrets;
+    data.event_stream_keys = sensitive.event_stream_keys;
+    data.oauth_connections = sensitive.oauth_connections;
+    for webhook in &mut data.webhooks {
+        webhook.secret = sensitive.webhook_secrets.get(&webhook.id).cloned();
+    }
+}
+
+fn encrypt_sensitive_state(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, String> {
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|error| error.to_string())?;
+    let uuid = Uuid::new_v4();
+    let nonce_bytes = &uuid.as_bytes()[..12];
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(nonce_bytes), plaintext)
+        .map_err(|_| "failed to encrypt state secrets".to_string())?;
+    let mut encoded = nonce_bytes.to_vec();
+    encoded.extend(ciphertext);
+    Ok(encoded)
+}
+
+fn load_sensitive_state(path: &Path, key: &[u8; 32]) -> Option<SensitiveState> {
+    let encrypted_path = path.with_extension("secrets");
+    let encoded = std::fs::read(encrypted_path).ok()?;
+    if encoded.len() <= 12 {
+        return None;
+    }
+    let cipher = Aes256Gcm::new_from_slice(key).ok()?;
+    let plaintext = cipher
+        .decrypt(Nonce::from_slice(&encoded[..12]), &encoded[12..])
+        .ok()?;
+    serde_json::from_slice(&plaintext).ok()
+}
+
+fn atomic_write(path: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("state path has no parent"))?;
+    std::fs::create_dir_all(parent)?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("state");
+    let temporary = parent.join(format!(".{file_name}.{}.tmp", Uuid::new_v4()));
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = file.metadata()?.permissions();
+            permissions.set_mode(mode);
+            std::fs::set_permissions(&temporary, permissions)?;
+        }
+        std::fs::rename(&temporary, path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
+fn write_state_files(
+    path: &Path,
+    public: &[u8],
+    sensitive: Option<&[u8]>,
+) -> std::io::Result<()> {
+    atomic_write(path, public, 0o600)?;
+    if let Some(sensitive) = sensitive {
+        atomic_write(&path.with_extension("secrets"), sensitive, 0o600)?;
+    }
+    Ok(())
 }
 
 #[derive(Clone)]
 pub struct RestreamStore {
     data: Arc<RwLock<RestreamData>>,
     state_path: Option<PathBuf>,
+    state_key: Option<Arc<[u8; 32]>>,
     storage_root: Arc<PathBuf>,
+    persist_lock: Arc<Mutex<()>>,
     recording_sessions: Arc<RwLock<HashMap<String, String>>>,
     oauth_states: Arc<RwLock<HashMap<String, (String, String, u64)>>>,
+    login_throttle: Arc<Mutex<HashMap<String, LoginThrottle>>>,
     auth: Arc<AuthConfig>,
+    runtime_config: Arc<RwLock<RuntimeIngestConfig>>,
+    runtime_platforms: Option<Arc<RwLock<Vec<Platform>>>>,
     event_tx: broadcast::Sender<EventNotification>,
     chat_tx: broadcast::Sender<ChatMessage>,
     platform_event_tx: broadcast::Sender<PlatformEvent>,
@@ -713,7 +937,7 @@ impl Default for RestreamStore {
 
 impl RestreamStore {
     pub fn new() -> Self {
-        Self::from_parts(None, None)
+        Self::from_parts(None, None, RuntimeIngestConfig::default(), None)
     }
 
     pub fn with_state_path(path: impl Into<PathBuf>) -> Self {
@@ -722,63 +946,120 @@ impl RestreamStore {
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .join("storage");
-        Self::from_parts(Some(path), Some(storage_root))
+        Self::from_parts(
+            Some(path),
+            Some(storage_root),
+            RuntimeIngestConfig::default(),
+            None,
+        )
     }
 
-    fn from_parts(state_path: Option<PathBuf>, storage_root: Option<PathBuf>) -> Self {
-        let data = state_path
+    pub fn with_runtime_config(
+        path: impl Into<PathBuf>,
+        listen_addr: impl Into<String>,
+        listen_port: u16,
+        stream_key: impl Into<String>,
+        platforms: Arc<RwLock<Vec<Platform>>>,
+    ) -> Self {
+        let path = path.into();
+        let storage_root = path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("storage");
+        let runtime_config = RuntimeIngestConfig {
+            listen_addr: listen_addr.into(),
+            listen_port,
+            advertised_host: std::env::var("RESTREAM_PUBLIC_HOST")
+                .unwrap_or_else(|_| "localhost".into()),
+            stream_key: stream_key.into(),
+        };
+        Self::from_parts(
+            Some(path),
+            Some(storage_root),
+            runtime_config,
+            Some(platforms),
+        )
+    }
+
+    fn from_parts(
+        state_path: Option<PathBuf>,
+        storage_root: Option<PathBuf>,
+        runtime_config: RuntimeIngestConfig,
+        runtime_platforms: Option<Arc<RwLock<Vec<Platform>>>>,
+    ) -> Self {
+        let state_key = state_path
             .as_ref()
-            .and_then(|path| std::fs::read_to_string(path).ok())
-            .and_then(|contents| serde_json::from_str(&contents).ok())
-            .unwrap_or_default();
+            .and_then(|path| load_or_create_state_key(path));
+        let (mut data, legacy_sensitive) = load_state(state_path.as_deref());
+        if let (Some(path), Some(key)) = (state_path.as_deref(), state_key.as_deref()) {
+            if let Some(sensitive) = load_sensitive_state(path, key) {
+                apply_sensitive_state(&mut data, sensitive);
+            } else if let Some(legacy_sensitive) = legacy_sensitive {
+                warn!(path = %path.display(), "migrating plaintext state secrets to encrypted storage");
+                apply_sensitive_state(&mut data, legacy_sensitive);
+            }
+        } else if let Some(legacy_sensitive) = legacy_sensitive {
+            apply_sensitive_state(&mut data, legacy_sensitive);
+        }
         let (event_tx, _) = broadcast::channel(512);
         let (chat_tx, _) = broadcast::channel(512);
         let (platform_event_tx, _) = broadcast::channel(256);
         Self {
             data: Arc::new(RwLock::new(data)),
             state_path,
+            state_key,
             storage_root: Arc::new(
                 storage_root.unwrap_or_else(|| std::env::temp_dir().join("reestream-storage")),
             ),
+            persist_lock: Arc::new(Mutex::new(())),
             recording_sessions: Arc::new(RwLock::new(HashMap::new())),
             oauth_states: Arc::new(RwLock::new(HashMap::new())),
+            login_throttle: Arc::new(Mutex::new(HashMap::new())),
             auth: Arc::new(AuthConfig::from_env()),
+            runtime_config: Arc::new(RwLock::new(runtime_config)),
+            runtime_platforms,
             event_tx,
             chat_tx,
             platform_event_tx,
         }
     }
 
-    fn persist(&self, data: &RestreamData) {
+    async fn persist(&self, data: &RestreamData) {
         let Some(path) = &self.state_path else {
             return;
         };
-        let Some(parent) = path.parent() else {
-            return;
+        let public = match serde_json::to_vec_pretty(data) {
+            Ok(encoded) => encoded,
+            Err(error) => {
+                warn!(%error, "failed to encode Reestream state");
+                return;
+            }
         };
-        if let Err(error) = std::fs::create_dir_all(parent) {
-            warn!(%error, "failed to create Reestream state directory");
-            return;
-        }
-        let temporary = path.with_extension("json.tmp");
-        let result = serde_json::to_vec_pretty(data)
-            .map_err(|error| error.to_string())
-            .and_then(|encoded| {
-                std::fs::write(&temporary, encoded).map_err(|error| error.to_string())
-            })
-            .and_then(|_| {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let mut permissions = std::fs::metadata(&temporary)
-                        .map_err(|error| error.to_string())?
-                        .permissions();
-                    permissions.set_mode(0o600);
-                    std::fs::set_permissions(&temporary, permissions)
-                        .map_err(|error| error.to_string())?;
-                }
-                std::fs::rename(&temporary, path).map_err(|error| error.to_string())
-            });
+        let sensitive = self.state_key.as_deref().and_then(|key| {
+            let state = SensitiveState {
+                channel_secrets: data.channel_secrets.clone(),
+                event_stream_keys: data.event_stream_keys.clone(),
+                oauth_connections: data.oauth_connections.clone(),
+                webhook_secrets: data
+                    .webhooks
+                    .iter()
+                    .filter_map(|webhook| {
+                        webhook
+                            .secret
+                            .as_ref()
+                            .map(|secret| (webhook.id.clone(), secret.clone()))
+                    })
+                    .collect(),
+            };
+            let encoded = serde_json::to_vec(&state).ok()?;
+            encrypt_sensitive_state(key, &encoded).ok()
+        });
+        let path = path.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            write_state_files(&path, &public, sensitive.as_deref())
+        })
+        .await
+        .unwrap_or_else(|error| Err(std::io::Error::other(error.to_string())));
         match result {
             Ok(()) => {}
             Err(error) => warn!(%error, "failed to persist Reestream state"),
@@ -786,17 +1067,50 @@ impl RestreamStore {
     }
 
     async fn mutate<R>(&self, operation: impl FnOnce(&mut RestreamData) -> R) -> R {
+        let _persist_guard = self.persist_lock.lock().await;
         let (result, snapshot) = {
             let mut data = self.data.write().await;
             let result = operation(&mut data);
             (result, data.clone())
         };
-        self.persist(&snapshot);
+        self.persist(&snapshot).await;
         result
     }
 
     pub fn auth_required(&self) -> bool {
         self.auth.required
+    }
+
+    pub async fn runtime_ingest_config(&self) -> RuntimeIngestConfig {
+        self.runtime_config.read().await.clone()
+    }
+
+    pub async fn runtime_ingest_url(&self) -> String {
+        let config = self.runtime_ingest_config().await;
+        format!(
+            "rtmp://{}:{}/live",
+            config.advertised_host, config.listen_port
+        )
+    }
+
+    pub async fn runtime_stream_key(&self) -> String {
+        self.runtime_config.read().await.stream_key.clone()
+    }
+
+    pub async fn set_runtime_stream_key(&self, stream_key: impl Into<String>) {
+        self.runtime_config.write().await.stream_key = stream_key.into();
+    }
+
+    pub async fn set_runtime_ingest_config(
+        &self,
+        listen_addr: impl Into<String>,
+        listen_port: u16,
+        stream_key: impl Into<String>,
+    ) {
+        let mut config = self.runtime_config.write().await;
+        config.listen_addr = listen_addr.into();
+        config.listen_port = listen_port;
+        config.stream_key = stream_key.into();
     }
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<EventNotification> {
@@ -837,9 +1151,29 @@ impl RestreamStore {
     }
 
     pub async fn login(&self, email: &str, password: &str) -> Result<AuthTokens, String> {
-        if email != self.auth.email || password != self.auth.password {
+        let throttle_key = email.trim().to_ascii_lowercase();
+        {
+            let throttles = self.login_throttle.lock().await;
+            if let Some(throttle) = throttles.get(&throttle_key) {
+                if throttle.blocked_until > now() {
+                    return Err("invalid credentials".into());
+                }
+            }
+        }
+
+        let valid = self.auth.password.as_deref().is_some_and(|configured| {
+            email == self.auth.email && password == configured
+        });
+        if !valid {
+            let mut throttles = self.login_throttle.lock().await;
+            let throttle = throttles.entry(throttle_key).or_default();
+            throttle.failures = throttle.failures.saturating_add(1);
+            if throttle.failures >= 5 {
+                throttle.blocked_until = now().saturating_add(60);
+            }
             return Err("invalid credentials".into());
         }
+        self.login_throttle.lock().await.remove(&throttle_key);
         self.create_session().await
     }
 
@@ -862,14 +1196,32 @@ impl RestreamStore {
     }
 
     pub async fn refresh_session(&self, refresh_token: &str) -> Result<AuthTokens, String> {
-        let valid =
-            self.data.read().await.sessions.iter().any(|session| {
-                session.refresh_token == refresh_token && session.expires_at > now()
-            });
-        if !valid {
+        let expires_in = 60 * 60 * 24 * 30;
+        let access_token = format!("rst_{}", id().replace('-', ""));
+        let next_refresh_token = format!("rsr_{}", id().replace('-', ""));
+        let next_session = AuthSession {
+            access_token: access_token.clone(),
+            refresh_token: next_refresh_token.clone(),
+            expires_at: now() + expires_in,
+        };
+        let refreshed = self
+            .mutate(|data| {
+                let index = data.sessions.iter().position(|session| {
+                    session.refresh_token == refresh_token && session.expires_at > now()
+                })?;
+                data.sessions[index] = next_session;
+                Some(())
+            })
+            .await;
+        if refreshed.is_none() {
             return Err("invalid refresh token".into());
         }
-        self.create_session().await
+        Ok(AuthTokens {
+            access_token,
+            refresh_token: next_refresh_token,
+            token_type: "Bearer".into(),
+            expires_in,
+        })
     }
 
     pub async fn revoke_session(&self, access_token: &str) {
@@ -1233,6 +1585,7 @@ impl RestreamStore {
         let timestamp = now();
         let event_id = id();
         let stream_key = format!("event-{}", event_id.replace('-', ""));
+        let server_url = self.runtime_ingest_url().await;
         let event = Event {
             id: event_id.clone(),
             draft_id,
@@ -1255,7 +1608,7 @@ impl RestreamStore {
             loops_count,
             guest_link: Some(format!("/studio/guest/{event_id}")),
             ingest: IngestCredentials {
-                server_url: "rtmp://localhost:1935/live".into(),
+                server_url,
                 stream_key,
                 backup_server_url: None,
                 protocol: "rtmp".into(),
@@ -2568,7 +2921,7 @@ impl RestreamStore {
             });
             let body_bytes = serde_json::to_vec(&body).unwrap_or_default();
             let signature = webhook.secret.as_deref().and_then(|secret| {
-                let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).ok()?;
+                let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(secret.as_bytes()).ok()?;
                 mac.update(&body_bytes);
                 let digest = mac.finalize().into_bytes();
                 let encoded = digest
@@ -2602,6 +2955,14 @@ impl reestream_core::client::PublishKeyResolver for RestreamStore {
         &self,
         stream_key: &str,
     ) -> Option<Vec<reestream_core::config::Platform>> {
+        let runtime_key = self.runtime_stream_key().await;
+        if !runtime_key.is_empty() && runtime_key == stream_key {
+            let platforms = match &self.runtime_platforms {
+                Some(platforms) => platforms.read().await.clone(),
+                None => Vec::new(),
+            };
+            return Some(platforms.into_iter().filter(|platform| platform.enabled).collect());
+        }
         let data = self.data.read().await;
         let event_id = data
             .event_stream_keys

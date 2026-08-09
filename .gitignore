@@ -1,2 +1,6 @@
 /target
 config.toml
+config.state.json
+config.state.secrets
+config.state.key
+storage/

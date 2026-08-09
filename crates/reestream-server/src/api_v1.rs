@@ -24,7 +24,7 @@ use uuid::Uuid;
 use crate::http::AppState;
 use crate::restream::{
     Brand, Caption, Channel, EventStatus, QrCode, RestreamStore, StorageFile, StreamType, Ticker,
-    WebhookSubscription, ingest_servers, is_valid_scheduled_for, now, platform_catalog,
+    WebhookSubscription, ingest_servers_for_url, is_valid_scheduled_for, now, platform_catalog,
 };
 
 #[derive(Debug, Serialize)]
@@ -118,6 +118,43 @@ fn parse_url(value: &str, field: &str) -> Result<(), Response> {
         return Err(bad_request(format!("{field} must include a host")));
     }
     Ok(())
+}
+
+fn parse_destination_url(value: &str, field: &str) -> Result<(), Response> {
+    let parsed = url::Url::parse(value)
+        .map_err(|_| bad_request(format!("{field} must be a valid RTMP URL")))?;
+    if !matches!(parsed.scheme(), "rtmp" | "rtmps") || parsed.host_str().is_none() {
+        return Err(bad_request(format!(
+            "{field} must use rtmp:// or rtmps:// and include a host"
+        )));
+    }
+    Ok(())
+}
+
+fn parse_http_url(value: &str, field: &str) -> Result<url::Url, Response> {
+    let parsed = url::Url::parse(value)
+        .map_err(|_| bad_request(format!("{field} must be a valid HTTP(S) URL")))?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err(bad_request(format!(
+            "{field} must use http:// or https:// and include a host"
+        )));
+    }
+    if let Some(host) = parsed.host_str()
+        && (host.eq_ignore_ascii_case("localhost")
+            || host.ends_with(".localhost")
+            || host.ends_with(".local"))
+    {
+        return Err(bad_request(format!("{field} cannot target a local hostname")));
+    }
+    if let Some(ip) = parsed.host().and_then(|host| match host {
+        url::Host::Ipv4(ip) => Some(std::net::IpAddr::V4(ip)),
+        url::Host::Ipv6(ip) => Some(std::net::IpAddr::V6(ip)),
+        url::Host::Domain(_) => None,
+    }) && (ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified())
+    {
+        return Err(bad_request(format!("{field} cannot target a private address")));
+    }
+    Ok(parsed)
 }
 
 fn required(value: &str, field: &str) -> Result<String, Response> {
@@ -689,6 +726,13 @@ async fn save_setup(
     State(state): State<AppState>,
     Json(request): Json<SetupSaveRequest>,
 ) -> Response {
+    if !reestream_core::setup::get_setup_status(&state.config_path).first_run {
+        return error(
+            StatusCode::CONFLICT,
+            "setup_already_completed",
+            "initial setup is already complete; authenticate before changing configuration",
+        );
+    }
     let request = reestream_core::setup::SetupRequest {
         rtmp_addr: request.rtmp_addr,
         rtmp_port: request.rtmp_port,
@@ -723,8 +767,8 @@ async fn list_platform_catalog() -> Response {
     ok(platform_catalog())
 }
 
-async fn list_ingest_servers() -> Response {
-    ok(ingest_servers())
+async fn list_ingest_servers(State(state): State<AppState>) -> Response {
+    ok(ingest_servers_for_url(&state.restream.runtime_ingest_url().await))
 }
 
 async fn login(State(state): State<AppState>, Json(request): Json<LoginRequest>) -> Response {
@@ -764,13 +808,10 @@ async fn me(State(state): State<AppState>) -> Response {
 }
 
 async fn selected_ingest(State(state): State<AppState>) -> Response {
-    let stream_id = reestream_core::setup::get_stream_key(&state.config_path)
-        .ok()
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "local".into());
+    let stream_id = state.restream.runtime_stream_key().await;
     ok(json!({
         "ingestId": "local",
-        "serverUrl": "rtmp://localhost:1935/live",
+        "serverUrl": state.restream.runtime_ingest_url().await,
         "backupServerUrl": configured_rtmps_url(),
         "srtUrl": srt_ingest_url(&stream_id),
         "protocol": "rtmp"
@@ -778,27 +819,23 @@ async fn selected_ingest(State(state): State<AppState>) -> Response {
 }
 
 async fn global_stream_key(State(state): State<AppState>) -> Response {
-    match reestream_core::setup::get_stream_key(&state.config_path) {
-        Ok(stream_key) if !stream_key.is_empty() => {
+    let stream_key = state.restream.runtime_stream_key().await;
+    if !stream_key.is_empty() {
             let srt_url = srt_ingest_url(&stream_key);
             ok(json!({"streamKey": stream_key, "srtUrl": srt_url}))
-        }
-        Ok(_) => error(
+    } else {
+        error(
             StatusCode::NOT_FOUND,
             "stream_key_not_configured",
             "global stream key is not configured",
-        ),
-        Err(read_error) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "config_unavailable",
-            read_error.to_string(),
-        ),
+        )
     }
 }
 
 async fn reset_global_stream_key(State(state): State<AppState>) -> Response {
     match reestream_core::setup::reset_stream_key(&state.config_path) {
         Ok(stream_key) => {
+            state.restream.set_runtime_stream_key(stream_key.clone()).await;
             let srt_url = srt_ingest_url(&stream_key);
             ok(json!({"streamKey": stream_key, "srtUrl": srt_url}))
         }
@@ -1094,7 +1131,7 @@ async fn create_channel(
         Ok(value) => value,
         Err(response) => return response,
     };
-    if let Err(response) = parse_url(&stream_url, "streamUrl") {
+    if let Err(response) = parse_destination_url(&stream_url, "streamUrl") {
         return response;
     }
     let stream_key = match required(&request.stream_key, "streamKey") {
@@ -1142,7 +1179,7 @@ async fn update_channel(
     Json(request): Json<UpdateChannelRequest>,
 ) -> Response {
     if let Some(ref value) = request.stream_url {
-        if let Err(response) = parse_url(value, "streamUrl") {
+        if let Err(response) = parse_destination_url(value, "streamUrl") {
             return response;
         }
     }
@@ -1456,7 +1493,12 @@ fn configured_rtmps_url() -> Option<String> {
 }
 
 fn srt_ingest_url(stream_id: &str) -> String {
-    let mut url = url::Url::parse("srt://localhost:3000").expect("static SRT URL is valid");
+    let port = std::env::var("RESTREAM_SRT_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(3000);
+    let mut url = url::Url::parse(&format!("srt://localhost:{port}"))
+        .expect("static SRT URL is valid");
     url.query_pairs_mut().append_pair("streamid", stream_id);
     url.to_string()
 }

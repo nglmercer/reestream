@@ -33,7 +33,7 @@ webhook = ["dep:reestream-server", "reestream-server/api"]
 all = ["hls", "api", "ffmpeg", "preview", "srt", "webhook"]
 
 [dependencies]
-bytes = "1.10"
+bytes = "1.11.1"
 reestream-core = { path = "crates/reestream-core", optional = true }
 reestream-ffmpeg = { path = "crates/reestream-ffmpeg", optional = true }
 reestream-server = { path = "crates/reestream-server", optional = true }
@@ -55,7 +55,7 @@ tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 url = "2.5"
 
 [dev-dependencies]
-bytes = "1.10"
+bytes = "1.11.1"
 rml_rtmp = "0.8"
 serde_json = "1"
 proptest = "1"
