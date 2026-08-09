@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'preact/hooks';
 import { apiV1 } from './api';
-import type { Channel as V1Channel, DashboardStatus, Event, PlatformCatalogEntry, StreamType } from './api';
+import type { Channel as V1Channel, Event, PlatformCatalogEntry, StreamType } from './api';
 import { usePolling, useStreamWs } from './hooks';
 import { useLocale } from './hooks/useLocale';
 import { useLogger } from './components/LogViewer';
@@ -9,14 +9,13 @@ import { HomePage } from './components/HomePage';
 import { CreateStreamDialog } from './components/CreateStreamDialog';
 import { StreamDetail } from './components/StreamDetail';
 import { ChannelsPage } from './components/ChannelsPage';
-import { ProductPage } from './components/ProductPage';
 import { SetupWizard } from './components/SetupWizard';
 import { SettingsPanel } from './components/SettingsPanel';
 import type { ChannelUpdate, DashboardChannel } from './components/PlatformsTable';
 
 const EVENTS_POLL = 10_000;
 const CHANNELS_POLL = 15_000;
-const DASHBOARD_SECTIONS: readonly DashboardSection[] = ['home', 'past', 'clips', 'storage', 'channels', 'analytics'];
+const DASHBOARD_SECTIONS: readonly DashboardSection[] = ['home', 'past', 'channels'];
 
 function routeFromLocation(): { section: DashboardSection; eventId: string | null } {
   const path = window.location.pathname.replace(/\/+$/, '') || '/home';
@@ -103,8 +102,6 @@ export function App() {
     setPlatformCatalog(catalog);
     return channels.map((channel) => toDashboardChannel(channel, catalog));
   }, CHANNELS_POLL);
-  const status = usePolling<DashboardStatus>(() => apiV1.getStatus(), 5_000);
-
   const { connected: wsConnected } = useStreamWs({
     onInit: (events) => {
       setRealtimeEvents(events);
@@ -195,7 +192,7 @@ export function App() {
   const channelWarning = channels.some((channel) => !!channel.lastError);
   const page = useMemo(() => {
     if (selectedEvent) {
-      return <StreamDetail event={selectedEvent} channels={channels} onBack={() => navigate('home')} onChannels={() => navigate('channels')} onClips={() => navigate('clips')} onUpdate={updateRealtimeEvent} />;
+      return <StreamDetail event={selectedEvent} channels={channels} onBack={() => navigate('home')} onChannels={() => navigate('channels')} onUpdate={updateRealtimeEvent} />;
     }
     if (section === 'home' || section === 'past') {
       return <HomePage events={events} channels={channels} loading={eventsPoll.loading} past={section === 'past'} onOpen={(event) => openEvent(event.id)} onCreate={() => setShowCreate(true)} onDuplicate={duplicateEvent} onDelete={deleteEvent} onChannels={() => navigate('channels')} onRefresh={refreshEvents} />;
@@ -203,8 +200,8 @@ export function App() {
     if (section === 'channels') {
       return <ChannelsPage channels={channels} loading={channelsPoll.loading} onRefresh={refreshChannels} onAdd={addChannel} onRemove={removeChannel} onUpdate={updateChannel} onToggle={toggleChannel} />;
     }
-    return <ProductPage section={section} status={status.data} onPrimary={() => section === 'analytics' ? status.refresh() : setShowCreate(true)} />;
-  }, [selectedEvent, section, events, channels, eventsPoll.loading, channelsPoll.loading, status.data, addChannel, removeChannel, updateChannel, toggleChannel, duplicateEvent, deleteEvent, updateRealtimeEvent, navigate, openEvent, refreshEvents]);
+    return null;
+  }, [selectedEvent, section, events, channels, eventsPoll.loading, channelsPoll.loading, addChannel, removeChannel, updateChannel, toggleChannel, duplicateEvent, deleteEvent, updateRealtimeEvent, navigate, openEvent, refreshEvents]);
 
   if (needsSetup === true) return <SetupWizard />;
   if (needsSetup === null) return <div class="boot-screen"><div class="brand-mark"><span>✦</span></div><span>{t('common.loading')}</span></div>;

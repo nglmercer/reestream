@@ -1,7 +1,7 @@
 import { useLocale } from '../hooks/useLocale';
 import { Icon, type IconName } from './Icon';
 
-export type DashboardSection = 'home' | 'past' | 'clips' | 'storage' | 'channels' | 'analytics';
+export type DashboardSection = 'home' | 'past' | 'channels';
 
 interface Props {
   active: DashboardSection;
@@ -11,13 +11,10 @@ interface Props {
   onSettings: () => void;
 }
 
-const items: Array<{ id: DashboardSection; icon: IconName; label: 'home' | 'past' | 'clips' | 'storage' | 'channels' | 'analytics' }> = [
+const items: Array<{ id: DashboardSection; icon: IconName; label: 'home' | 'past' | 'channels' }> = [
   { id: 'home', icon: 'home', label: 'home' },
   { id: 'past', icon: 'refresh', label: 'past' },
-  { id: 'clips', icon: 'clapperboard', label: 'clips' },
-  { id: 'storage', icon: 'storage', label: 'storage' },
   { id: 'channels', icon: 'radio', label: 'channels' },
-  { id: 'analytics', icon: 'activity', label: 'analytics' },
 ];
 
 export function Sidebar({ active, collapsed = false, channelWarning = false, onNavigate, onSettings }: Props) {
@@ -28,21 +25,7 @@ export function Sidebar({ active, collapsed = false, channelWarning = false, onN
       <div class="sidebar-brand">
         <div class="brand-mark"><Icon name="sparkle" size={18} strokeWidth={1.9} /></div>
         {!collapsed && <span class="brand-wordmark">Reestream</span>}
-        {!collapsed && <button class="sidebar-collapse" aria-label="Collapse sidebar"><Icon name="chevronRight" size={15} /></button>}
       </div>
-
-      {!collapsed && (
-        <>
-          <button class="profile-switcher">
-            <span class="profile-avatar">A</span>
-            <span class="profile-copy"><strong>Reestream</strong><small>{t('nav.freePlan')}</small></span>
-            <Icon name="chevronDown" size={15} />
-          </button>
-          <button class="invite-button"><Icon name="users" size={16} />{t('nav.invite')}</button>
-          <div class="sidebar-section-label"><span>{t('nav.workspaces')}</span><Icon name="plus" size={15} /></div>
-          <button class="workspace-switcher"><span class="workspace-badge">D</span><span>Default</span><Icon name="chevronDown" size={15} /></button>
-        </>
-      )}
 
       <nav class="sidebar-nav" aria-label="Primary navigation">
         {items.map((item) => (
@@ -64,7 +47,6 @@ export function Sidebar({ active, collapsed = false, channelWarning = false, onN
           <Icon name="settings" size={18} />
           {!collapsed && <span>{t('nav.settings')}</span>}
         </button>
-        {!collapsed && <div class="sidebar-help"><Icon name="circleHelp" size={16} /><span>{t('nav.help')}</span><Icon name="external" size={13} /></div>}
       </div>
     </aside>
   );

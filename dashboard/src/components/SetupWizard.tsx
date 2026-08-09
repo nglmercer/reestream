@@ -129,11 +129,6 @@ export function SetupWizard() {
         <div class="setup-card bg-surface-alt border border-border rounded-2xl p-8">
           {step === 'welcome' && (
             <div class="text-center">
-              <div class="w-16 h-16 mx-auto mb-4 rounded-2xl flex items-center justify-center" style={{ backgroundColor: 'var(--accent-bg)' }}>
-                <svg class="w-8 h-8 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                </svg>
-              </div>
               <h1 class="text-2xl font-bold mb-2 text-fg">{t('setup.welcome')}</h1>
               <p class="text-fg-muted mb-6">
                 {t('setup.welcomeDesc')}

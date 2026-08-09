@@ -17,7 +17,7 @@ interface Props {
 }
 
 type Filter = 'all' | 'draft' | 'scheduled';
-type MenuAction = 'titles' | 'schedule' | 'duplicate' | 'channels' | 'settings' | 'delete';
+type MenuAction = 'titles' | 'duplicate' | 'channels' | 'delete';
 
 function statusLabel(status: EventStatus, t: (key: any, params?: any) => string): string {
   return t(`home.status.${status}`);
@@ -80,15 +80,8 @@ export function HomePage({ events, channels, loading, past = false, onOpen, onCr
 
   return (
     <div class="page-content home-page">
-      <div class="announcement-bar">
-        <Icon name="sparkle" size={16} />
-        <span>{t('home.announcement')}</span>
-        <button onClick={onCreate}>{t('home.upgrade')}</button>
-      </div>
-
       <div class="page-heading home-heading">
         <div>
-          <div class="eyebrow">{past ? t('nav.past') : t('nav.home')}</div>
           <h1>{past ? t('home.pastTitle') : t('home.title')}</h1>
         </div>
         <button class="primary-button" onClick={onCreate}><Icon name="plus" size={17} />{t('home.newStream')}</button>
@@ -103,17 +96,16 @@ export function HomePage({ events, channels, loading, past = false, onOpen, onCr
           ))}
         </div>
         <div class="toolbar-actions">
-          <button class="icon-button" title={t('home.search')}><Icon name="search" size={17} /></button>
           <button class="icon-button" title={t('home.refresh')} onClick={onRefresh}><Icon name="refresh" size={17} /></button>
         </div>
       </div>
 
       <div class="stream-list-card">
         <div class="stream-list-head">
-          <span>{t('home.streamTitle')} <Icon name="layers" size={13} /></span>
-          <span>{t('home.statusLabel')} <Icon name="layers" size={13} /></span>
+          <span>{t('home.streamTitle')}</span>
+          <span>{t('home.statusLabel')}</span>
           <span>{t('home.channelsLabel')}</span>
-          <span>{t('home.lastEdited')} <Icon name="chevronDown" size={13} /></span>
+          <span>{t('home.lastEdited')}</span>
           <span />
         </div>
 
@@ -121,7 +113,6 @@ export function HomePage({ events, channels, loading, past = false, onOpen, onCr
           <div class="stream-empty"><div class="loading-orb" /><span>{t('common.loading')}</span></div>
         ) : visibleEvents.length === 0 ? (
           <div class="stream-empty">
-            <div class="empty-icon"><Icon name="video" size={26} /></div>
             <strong>{past ? t('home.emptyPast') : t('home.emptyTitle')}</strong>
             <span>{past ? t('home.emptyPastDescription') : t('home.emptyDescription')}</span>
             {!past && <button class="secondary-button" onClick={onCreate}><Icon name="plus" size={16} />{t('home.createFirst')}</button>}
@@ -132,7 +123,7 @@ export function HomePage({ events, channels, loading, past = false, onOpen, onCr
             return (
               <div key={event.id} class="stream-row" onClick={() => onOpen(event)}>
                 <div class="stream-title-cell">
-                  <div class="stream-thumb"><Icon name={event.streamType === 'studio' ? 'monitor' : 'video'} size={19} /><span class="thumb-grid"><i /><i /><i /></span></div>
+                  <div class="stream-thumb" aria-hidden="true" />
                   <div class="stream-title-copy"><strong>{event.title || t('home.untitled')}</strong><small>{eventType(event, t)}</small></div>
                 </div>
                 <div><span class={statusClass(event.status)}><i />{statusLabel(event.status, t)}</span></div>
@@ -146,10 +137,8 @@ export function HomePage({ events, channels, loading, past = false, onOpen, onCr
                   {openMenu === event.id && (
                     <div class="action-menu">
                       <button onClick={() => runAction('titles', event)}><Icon name="edit" size={15} />{t('home.menu.titles')}</button>
-                      <button onClick={() => runAction('schedule', event)}><Icon name="calendar" size={15} />{t('home.menu.schedule')}</button>
                       <button onClick={() => runAction('duplicate', event)}><Icon name="copy" size={15} />{t('home.menu.duplicate')}</button>
                       <button onClick={() => runAction('channels', event)}><Icon name="link" size={15} />{t('home.menu.channels')}</button>
-                      <button onClick={() => runAction('settings', event)}><Icon name="settings" size={15} />{t('home.menu.settings')}</button>
                       <div class="action-divider" />
                       <button class="is-danger" onClick={() => runAction('delete', event)}><Icon name="trash" size={15} />{t('home.menu.delete')}</button>
                     </div>
