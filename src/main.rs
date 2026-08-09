@@ -1,8 +1,16 @@
 use clap::Parser;
+#[cfg(feature = "srt")]
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+#[cfg(feature = "srt")]
+use std::time::{Duration, Instant};
+#[cfg(feature = "srt")]
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
+#[cfg(feature = "srt")]
+use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::RwLock;
 #[cfg(any(feature = "hls", feature = "api"))]
 use tokio::sync::broadcast;
@@ -162,10 +170,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let srt_config = reestream::srt::SrtConfig {
             enabled: true,
             listen_port: 3000,
+            passphrase: std::env::var("RESTREAM_SRT_PASSPHRASE")
+                .ok()
+                .filter(|value| !value.is_empty()),
             ..Default::default()
         };
         if srt_config.enabled {
             let srt_listener = Arc::new(reestream::srt::SrtListener::new(srt_config));
+            let mut srt_packets = srt_listener.subscribe_packets();
+            let fallback_key = stream_key.clone();
+            let srt_rtmp_port = *rtmp_port;
+            tokio::spawn(async move {
+                forward_srt_packets(&mut srt_packets, fallback_key, srt_rtmp_port).await;
+            });
+
             let srt_l = srt_listener.clone();
             tokio::spawn(async move {
                 if let Err(e) = srt_l.run().await {
@@ -500,6 +518,132 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn run_setup(config_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     reestream::setup::run_cli_wizard(config_path)?;
     Ok(())
+}
+
+#[cfg(feature = "srt")]
+struct SrtForwardProcess {
+    stdin: ChildStdin,
+    child: Child,
+    last_packet: Instant,
+}
+
+#[cfg(feature = "srt")]
+fn is_safe_srt_stream_id(stream_id: &str) -> bool {
+    !stream_id.is_empty()
+        && stream_id.len() <= 256
+        && stream_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+#[cfg(feature = "srt")]
+async fn forward_srt_packets(
+    packets: &mut tokio::sync::broadcast::Receiver<reestream::srt::SrtPacket>,
+    fallback_key: String,
+    rtmp_port: u16,
+) {
+    let mut forwards = HashMap::<String, SrtForwardProcess>::new();
+    let mut cleanup = tokio::time::interval(Duration::from_secs(10));
+    cleanup.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    loop {
+        tokio::select! {
+            packet = packets.recv() => {
+                let packet = match packet {
+                    Ok(packet) => packet,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => {
+                        warn!("SRT packet bridge lagged by {} packets", count);
+                        continue;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                };
+                let stream_key = packet
+                    .stream_id
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| fallback_key.clone());
+                if !is_safe_srt_stream_id(&stream_key) {
+                    warn!("Ignoring SRT packet with invalid stream id");
+                    continue;
+                }
+
+                if !forwards.contains_key(&stream_key) {
+                    let target = format!("rtmp://127.0.0.1:{rtmp_port}/live/{stream_key}");
+                    let mut child = match Command::new("ffmpeg")
+                        .args([
+                            "-hide_banner",
+                            "-loglevel",
+                            "error",
+                            "-f",
+                            "mpegts",
+                            "-i",
+                            "pipe:0",
+                            "-c",
+                            "copy",
+                            "-f",
+                            "flv",
+                            &target,
+                        ])
+                        .stdin(std::process::Stdio::piped())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .spawn()
+                    {
+                        Ok(child) => child,
+                        Err(error) => {
+                            error!("Failed to start SRT-to-RTMP bridge: {}", error);
+                            continue;
+                        }
+                    };
+                    let Some(stdin) = child.stdin.take() else {
+                        error!("SRT-to-RTMP bridge has no writable input");
+                        let _ = child.kill().await;
+                        continue;
+                    };
+                    info!(stream_key = %stream_key, target = %target, "SRT-to-RTMP bridge started");
+                    forwards.insert(
+                        stream_key.clone(),
+                        SrtForwardProcess {
+                            stdin,
+                            child,
+                            last_packet: Instant::now(),
+                        },
+                    );
+                }
+
+                let write_result = if let Some(forward) = forwards.get_mut(&stream_key) {
+                    forward.last_packet = Instant::now();
+                    forward.stdin.write_all(&packet.data).await
+                } else {
+                    continue;
+                };
+                if let Err(error) = write_result {
+                    warn!(stream_key = %stream_key, "SRT-to-RTMP bridge stopped: {}", error);
+                    if let Some(mut forward) = forwards.remove(&stream_key) {
+                        let _ = forward.child.kill().await;
+                    }
+                }
+            }
+            _ = cleanup.tick() => {
+                let expired = forwards
+                    .iter()
+                    .filter(|(_, forward)| forward.last_packet.elapsed() > Duration::from_secs(15))
+                    .map(|(stream_key, _)| stream_key.clone())
+                    .collect::<Vec<_>>();
+                for stream_key in expired {
+                    if let Some(mut forward) = forwards.remove(&stream_key) {
+                        let _ = forward.stdin.shutdown().await;
+                        let _ = forward.child.kill().await;
+                        info!(stream_key = %stream_key, "SRT-to-RTMP bridge timed out");
+                    }
+                }
+            }
+        }
+    }
+
+    for (_, mut forward) in forwards {
+        let _ = forward.stdin.shutdown().await;
+        let _ = forward.child.kill().await;
+    }
 }
 
 #[cfg(test)]

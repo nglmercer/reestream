@@ -465,6 +465,14 @@ fn protected_routes(state: AppState) -> Router<AppState> {
         .route("/api/v1/events/{id}/end", post(end_event))
         .route("/api/v1/events/{id}/recordings", get(event_recordings))
         .route(
+            "/api/v1/events/{id}/recordings/start",
+            post(start_event_recording_route),
+        )
+        .route(
+            "/api/v1/events/{id}/recordings/stop",
+            post(stop_event_recording_route),
+        )
+        .route(
             "/api/v1/events/{id}/recordings/download-url",
             post(recording_download_url),
         )
@@ -755,20 +763,26 @@ async fn me(State(state): State<AppState>) -> Response {
     ok(state.restream.profile().await)
 }
 
-async fn selected_ingest() -> Response {
+async fn selected_ingest(State(state): State<AppState>) -> Response {
+    let stream_id = reestream_core::setup::get_stream_key(&state.config_path)
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "local".into());
     ok(json!({
         "ingestId": "local",
         "serverUrl": "rtmp://localhost:1935/live",
+        "backupServerUrl": configured_rtmps_url(),
+        "srtUrl": srt_ingest_url(&stream_id),
         "protocol": "rtmp"
     }))
 }
 
 async fn global_stream_key(State(state): State<AppState>) -> Response {
     match reestream_core::setup::get_stream_key(&state.config_path) {
-        Ok(stream_key) if !stream_key.is_empty() => ok(json!({
-            "streamKey": stream_key,
-            "srtUrl": "srt://localhost:3000?streamid=local"
-        })),
+        Ok(stream_key) if !stream_key.is_empty() => {
+            let srt_url = srt_ingest_url(&stream_key);
+            ok(json!({"streamKey": stream_key, "srtUrl": srt_url}))
+        }
         Ok(_) => error(
             StatusCode::NOT_FOUND,
             "stream_key_not_configured",
@@ -784,10 +798,10 @@ async fn global_stream_key(State(state): State<AppState>) -> Response {
 
 async fn reset_global_stream_key(State(state): State<AppState>) -> Response {
     match reestream_core::setup::reset_stream_key(&state.config_path) {
-        Ok(stream_key) => ok(json!({
-            "streamKey": stream_key,
-            "srtUrl": "srt://localhost:3000?streamid=local",
-        })),
+        Ok(stream_key) => {
+            let srt_url = srt_ingest_url(&stream_key);
+            ok(json!({"streamKey": stream_key, "srtUrl": srt_url}))
+        }
         Err(reset_error) => error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "config_unavailable",
@@ -1410,7 +1424,7 @@ async fn event_stream_key(State(state): State<AppState>, Path(id): Path<String>)
         Some(credentials) => ok(json!({
             "serverUrl": credentials.server_url,
             "streamKey": credentials.stream_key,
-            "backupServerUrl": credentials.backup_server_url,
+            "backupServerUrl": credentials.backup_server_url.or_else(configured_rtmps_url),
             "protocol": credentials.protocol,
         })),
         None => not_found("event"),
@@ -1418,13 +1432,33 @@ async fn event_stream_key(State(state): State<AppState>, Path(id): Path<String>)
 }
 
 async fn event_srt_keys(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    if state.restream.get_event(&id).await.is_none() {
+    let Some(event) = state.restream.get_event(&id).await else {
         return not_found("event");
-    }
+    };
+    let stream_id = if event.ingest.stream_key.is_empty() {
+        id
+    } else {
+        event.ingest.stream_key
+    };
+    let passphrase = std::env::var("RESTREAM_SRT_PASSPHRASE")
+        .ok()
+        .filter(|value| !value.is_empty());
     ok(json!({
-        "primary": {"url": format!("srt://localhost:3000?streamid={id}"), "passphrase": null},
+        "primary": {"url": srt_ingest_url(&stream_id), "passphrase": passphrase},
         "backup": null
     }))
+}
+
+fn configured_rtmps_url() -> Option<String> {
+    std::env::var("RESTREAM_RTMPS_URL")
+        .ok()
+        .filter(|value| value.starts_with("rtmps://"))
+}
+
+fn srt_ingest_url(stream_id: &str) -> String {
+    let mut url = url::Url::parse("srt://localhost:3000").expect("static SRT URL is valid");
+    url.query_pairs_mut().append_pair("streamid", stream_id);
+    url.to_string()
 }
 
 pub async fn start_event_recording(
@@ -1489,6 +1523,58 @@ pub async fn finish_event_recording(
     let _ = store
         .update_file_state(file_id, recording.size_bytes, status.into())
         .await;
+}
+
+async fn start_event_recording_route(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Response {
+    let Some(event) = state.restream.get_event(&id).await else {
+        return not_found("event");
+    };
+    if event.status != EventStatus::Live {
+        return error(
+            StatusCode::CONFLICT,
+            "event_not_live",
+            "recording can only start for a live event",
+        );
+    }
+    if state.restream.recording_session(&id).await.is_some() {
+        return error(
+            StatusCode::CONFLICT,
+            "recording_already_active",
+            "event recording is already active",
+        );
+    }
+
+    match start_event_recording(&state.recording_manager, &state.restream, &event).await {
+        Some(file) => {
+            let recording_id = state.restream.recording_session(&id).await;
+            created(json!({
+                "recordingId": recording_id,
+                "file": public_file(file),
+            }))
+        }
+        None => error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "recording_failed",
+            "recording is disabled or ffmpeg could not start",
+        ),
+    }
+}
+
+async fn stop_event_recording_route(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Response {
+    let Some(event) = state.restream.get_event(&id).await else {
+        return not_found("event");
+    };
+    if state.restream.recording_session(&id).await.is_none() {
+        return not_found("active recording");
+    }
+    finish_event_recording(&state.recording_manager, &state.restream, &event).await;
+    ok(json!({"eventId": id, "status": "completed"}))
 }
 
 async fn validate_event_playback(
@@ -1660,7 +1746,16 @@ async fn event_recordings(State(state): State<AppState>, Path(id): Path<String>)
             })
         })
         .collect::<Vec<_>>();
+    let active = match state.restream.recording_session(&id).await {
+        Some(recording_id) => state
+            .recording_manager
+            .get_recording(&recording_id)
+            .await
+            .map(public_recording),
+        None => None,
+    };
     ok(json!({
+        "active": active,
         "primaryVideos": primary_videos,
         "secondaryVideos": [],
         "audio": [],
@@ -3044,6 +3139,8 @@ fn openapi_document() -> Value {
         "/api/v1/events/{id}/go-live",
         "/api/v1/events/{id}/end",
         "/api/v1/events/{id}/recordings",
+        "/api/v1/events/{id}/recordings/start",
+        "/api/v1/events/{id}/recordings/stop",
         "/api/v1/events/{id}/recordings/download-url",
         "/api/v1/events/{id}/recordings/transcriptions",
         "/api/v1/events/{id}/chat",

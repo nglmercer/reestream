@@ -7,5 +7,5 @@ pub mod sender;
 pub use bridge::{BridgeConfig, BridgeStatsSnapshot, SrtBridge};
 pub use config::SrtConfig;
 pub use error::SrtError;
-pub use listener::SrtListener;
+pub use listener::{SrtListener, SrtPacket};
 pub use sender::SrtSender;

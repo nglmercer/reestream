@@ -214,6 +214,8 @@ There are two related resources:
 | `POST` | `/events/{id}/end` | Transition to `ended` |
 | `POST` | `/events/{id}/viewers` | Record a viewer/bitrate sample |
 | `GET` | `/events/{id}/recordings` | Files linked to the event |
+| `POST` | `/events/{id}/recordings/start` | Start recording while the event is live |
+| `POST` | `/events/{id}/recordings/stop` | Stop the active event recording |
 | `POST` | `/events/{id}/recordings/download-url` | Resolve a recording by `fileName` |
 | `GET/POST` | `/events/{id}/recordings/transcriptions` | Read or request transcription work |
 | `GET` | `/events/{id}/chat` | Event chat history |
@@ -252,6 +254,16 @@ its status and size. By default recordings consume the local HTTP-FLV preview;
 set `RESTREAM_RECORDING_INPUT_URL` when the deployment uses another ingest
 source. Set `RESTREAM_RECORDING_ENABLED=false` to disable automatic event
 recording while retaining the manual legacy recording API.
+
+When built with the `srt` feature, SRT ingest listens on port `3000` and
+forwards MPEG-TS packets to the event key encoded in the SRT `streamid` query.
+Set `RESTREAM_SRT_PASSPHRASE` to enable the same encryption passphrase shown by
+`/events/{id}/srt-keys`; it must contain at least 10 characters.
+
+RTMPS is exposed only when configured. Set `RESTREAM_RTMPS_URL` to an
+`rtmps://` endpoint supplied by a TLS terminator or external ingest service;
+the dashboard then shows it as the backup protocol. Destination URLs using
+`rtmps://` are also supported by the outbound relay.
 
 ## Studio
 

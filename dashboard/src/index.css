@@ -246,6 +246,9 @@ input::placeholder { color: var(--fg-faint); }
 .toggle-track i { width: 14px; height: 14px; display: block; border-radius: 50%; background: #d3d3d7; transition: .15s; }
 .record-toggle input:checked + .toggle-track { background: #7256ec; }
 .record-toggle input:checked + .toggle-track i { transform: translateX(14px); background: #fff; }
+.record-toggle.is-disabled { color: #777780; }
+.record-toggle input:disabled + .toggle-track { opacity: .55; }
+.detail-inline-error { max-width: 150px; overflow: hidden; color: #f18c8c; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .detail-layout { display: grid; grid-template-columns: minmax(0, 1fr) 390px; gap: 14px; padding: 14px 16px 0; }
 .encoder-card, .detail-channel-panel { min-width: 0; border: 1px solid #252528; border-radius: 9px; background: #080809; }
 .encoder-card { overflow: hidden; }
@@ -260,14 +263,30 @@ input::placeholder { color: var(--fg-faint); }
 .video-live-badge span { width: 6px; height: 6px; border-radius: 50%; background: #fff; }
 .video-play-button { position: absolute; top: 50%; left: 50%; width: 56px; height: 56px; display: flex; align-items: center; justify-content: center; color: #fff; border: 1px solid rgba(255,255,255,.3); border-radius: 50%; background: rgba(0,0,0,.48); transform: translate(-50%, -50%); }
 .video-error { position: absolute; top: 50%; left: 50%; display: flex; align-items: center; gap: 8px; padding: 10px 14px; color: #ffb2b2; border: 1px solid #743434; border-radius: 7px; background: rgba(72, 17, 17, .8); transform: translate(-50%, -50%); font-size: 12px; }
-.encoder-controls { padding: 14px 18px 18px; border-top: 1px solid #26262a; background: #101011; }
+.collapsible-panel { min-width: 0; }
+.collapsible-trigger { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 15px 16px; color: #f2f2f3; border: 0; background: transparent; text-align: left; }
+.collapsible-trigger:hover { background: rgba(255,255,255,.035); }
+.collapsible-trigger > span { min-width: 0; display: flex; align-items: baseline; gap: 8px; }
+.collapsible-trigger strong { font-size: 13px; font-weight: 600; }
+.collapsible-trigger small { overflow: hidden; color: #898990; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.collapsible-trigger > svg { flex: 0 0 auto; color: #a6a6ad; transition: transform .15s ease; }
+.collapsible-panel.is-collapsed .collapsible-trigger > svg { transform: rotate(-90deg); }
+.collapsible-panel-body { padding: 0 16px 16px; }
+.encoder-settings-panel { border-top: 1px solid #26262a; background: #101011; }
+.encoder-settings-panel .collapsible-trigger { padding-right: 18px; padding-left: 18px; }
+.encoder-settings-panel .collapsible-panel-body { padding: 0; }
+.encoder-controls { padding: 0 18px 18px; background: #101011; }
+.protocol-tabs { display: flex; gap: 4px; width: fit-content; margin-bottom: 16px; padding: 4px; border-radius: 6px; background: #1c1c1e; }
+.protocol-tabs button { min-width: 75px; height: 30px; display: inline-flex; align-items: center; justify-content: center; color: #a2a2a9; border: 0; border-radius: 5px; background: transparent; font-size: 11px; font-weight: 600; }
+.protocol-tabs button.is-active { color: #fff; background: #38383b; box-shadow: 0 1px 4px rgba(0,0,0,.28); }
 .credential-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }
 .credential-field label { display: block; margin-bottom: 6px; color: #898990; font-size: 11px; }
 .credential-value { height: 37px; display: flex; align-items: center; gap: 6px; padding-left: 11px; color: #c8c8cd; border: 1px solid #3b3b40; border-radius: 6px; background: #29292c; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .credential-value span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .credential-value button { width: 34px; height: 35px; display: flex; align-items: center; justify-content: center; flex: 0 0 34px; margin-left: auto; color: #9e9ea7; border: 0; border-left: 1px solid #424247; background: transparent; }
 .credential-value button:hover { color: #fff; background: #35353a; }
-.detail-channel-panel { padding: 16px; background: #1c1c1e; }
+.credential-empty { padding: 10px 0 2px; color: #898990; font-size: 12px; }
+.detail-channel-panel { padding: 0; background: #1c1c1e; }
 .channel-panel-head { display: flex; align-items: flex-start; justify-content: space-between; }
 .channel-panel-head h2 { margin: 0 0 5px; color: #f2f2f3; font-size: 14px; font-weight: 600; }
 .channel-panel-head span { color: #8f8f97; font-size: 12px; }

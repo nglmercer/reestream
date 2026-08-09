@@ -4,7 +4,7 @@ import { useLocale } from '../hooks/useLocale';
 
 interface ServerInfoView {
   rtmpUrl: string;
-  rtmpsUrl: string;
+  rtmpsUrl: string | null;
   srtUrl: string | null;
   hlsUrl: string;
   flvUrl: string;
@@ -47,8 +47,8 @@ export function SettingsPanel({ onClose, addLog }: Props) {
         const rtmpUrl = ingest.serverUrl.replace(/\/live\/?$/, '');
         setInfo({
           rtmpUrl,
-          rtmpsUrl: rtmpUrl.replace(/^rtmp:/, 'rtmps:'),
-          srtUrl: credentials?.srtUrl ?? null,
+          rtmpsUrl: ingest.backupServerUrl,
+          srtUrl: ingest.srtUrl ?? credentials?.srtUrl ?? null,
           hlsUrl: `${origin}/stream.m3u8`,
           flvUrl: `${origin}/stream.flv`,
           dashboardUrl: origin,

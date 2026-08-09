@@ -13,3 +13,4 @@ export { HomePage } from './HomePage';
 export { CreateStreamDialog } from './CreateStreamDialog';
 export { StreamDetail } from './StreamDetail';
 export { ChannelsPage } from './ChannelsPage';
+export { CollapsiblePanel } from './CollapsiblePanel';

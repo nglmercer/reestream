@@ -172,6 +172,7 @@ export interface Transcription {
 }
 
 export interface EventRecordings {
+  active: ManualRecording | null;
   primaryVideos: Array<{
     fileId: string;
     fileName: string;
@@ -371,7 +372,13 @@ export class ReestreamApiV1 {
     return this.request<Profile>('/profile');
   }
 
-  getIngest(): Promise<{ ingestId: string; serverUrl: string; protocol: string }> {
+  getIngest(): Promise<{
+    ingestId: string;
+    serverUrl: string;
+    backupServerUrl: string | null;
+    srtUrl: string | null;
+    protocol: string;
+  }> {
     return this.request('/ingest');
   }
 
@@ -554,12 +561,27 @@ export class ReestreamApiV1 {
     return this.request(`/events/${id}/stream-key`);
   }
 
+  getEventSrtKeys(id: string): Promise<{
+    primary: { url: string; passphrase: string | null } | null;
+    backup: { url: string; passphrase: string | null } | null;
+  }> {
+    return this.request(`/events/${id}/srt-keys`);
+  }
+
   goLive(id: string): Promise<Event> {
     return this.request<Event>(`/events/${id}/go-live`, { method: 'POST' });
   }
 
   endEvent(id: string): Promise<Event> {
     return this.request<Event>(`/events/${id}/end`, { method: 'POST' });
+  }
+
+  startEventRecording(eventId: string): Promise<{ recordingId: string | null; file: StorageFile }> {
+    return this.request(`/events/${eventId}/recordings/start`, { method: 'POST' });
+  }
+
+  stopEventRecording(eventId: string): Promise<{ eventId: string; status: string }> {
+    return this.request(`/events/${eventId}/recordings/stop`, { method: 'POST' });
   }
 
   getManualRecordings(): Promise<ManualRecording[]> {
