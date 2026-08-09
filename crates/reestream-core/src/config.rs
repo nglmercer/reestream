@@ -153,7 +153,9 @@ impl ConfigBuilder {
                 return Err(format!("platform[{i}] url must use rtmp:// or rtmps://"));
             }
             if !p.url.username().is_empty() || p.url.password().is_some() {
-                return Err(format!("platform[{i}] url cannot contain embedded credentials"));
+                return Err(format!(
+                    "platform[{i}] url cannot contain embedded credentials"
+                ));
             }
         }
         Ok(())
@@ -190,9 +192,7 @@ impl Config {
                     return Err(format!("platform[{i}] url has no host"));
                 }
                 if !matches!(platform.url.scheme(), "rtmp" | "rtmps") {
-                    return Err(format!(
-                        "platform[{i}] url must use rtmp:// or rtmps://"
-                    ));
+                    return Err(format!("platform[{i}] url must use rtmp:// or rtmps://"));
                 }
                 if !platform.url.username().is_empty() || platform.url.password().is_some() {
                     return Err(format!(

@@ -69,6 +69,13 @@ export RESTREAM_ADMIN_EMAIL=owner@example.com
 export RESTREAM_ADMIN_PASSWORD='use-a-secret-password'
 ```
 
+Set both RESTREAM_AUTH_REQUIRED=true and RESTREAM_ADMIN_PASSWORD; enabling
+authentication without a password intentionally fails closed, so no login can
+succeed. GET /status, health, platform catalog, ingest catalog, and the
+one-time setup endpoints remain public for dashboard bootstrap. Private
+versioned resources, legacy control routes, WebSockets, and metrics require a
+valid bearer token.
+
 ### `POST /auth/login`
 
 Request:
@@ -255,10 +262,11 @@ set `RESTREAM_RECORDING_INPUT_URL` when the deployment uses another ingest
 source. Set `RESTREAM_RECORDING_ENABLED=false` to disable automatic event
 recording while retaining the manual legacy recording API.
 
-When built with the `srt` feature, SRT ingest listens on port `3000` and
-forwards MPEG-TS packets to the event key encoded in the SRT `streamid` query.
-Set `RESTREAM_SRT_PASSPHRASE` to enable the same encryption passphrase shown by
-`/events/{id}/srt-keys`; it must contain at least 10 characters.
+When built with the `srt` feature, SRT ingest is disabled unless
+RESTREAM_SRT_ENABLED=true and RESTREAM_SRT_PASSPHRASE are both set. It listens
+on RESTREAM_SRT_PORT (default 3000) and forwards MPEG-TS packets to the event
+key encoded in the SRT `streamid` query. The passphrase shown by
+`/events/{id}/srt-keys` must contain at least 10 characters.
 
 RTMPS is exposed only when configured. Set `RESTREAM_RTMPS_URL` to an
 `rtmps://` endpoint supplied by a TLS terminator or external ingest service;
@@ -330,9 +338,10 @@ plane. A provider adapter can fan it out to the connected platforms.
 
 ### WebSocket
 
-Connect to `/chat/ws?eventId={id}` with the same Bearer token. Browser clients
-that cannot set an `Authorization` header may use the short-lived access token
-as `access_token` in the WebSocket query string. The first frame:
+Connect to `/chat/ws?eventId={id}` with the same Bearer token. Prefer the
+`Sec-WebSocket-Protocol: reestream-bearer-<access-token>` handshake header for
+browser clients; the older `access_token` query parameter remains supported
+for compatibility but can expose tokens in URL logs. The first frame:
 
 ```json
 { "type": "init", "messages": [] }
@@ -377,6 +386,11 @@ duration, destination breakdown, and a `timeseries` array.
 | `GET` | `/clips/projects/{id}` | Read clip status |
 | `DELETE` | `/clips/projects/{id}` | Delete a clip project |
 | `GET` | `/clips/projects/{id}/download` | Download a ready clip |
+
+Multipart uploads stream directly to the storage root and are capped at 2 GiB
+by default. Set RESTREAM_MAX_UPLOAD_BYTES to change the limit. Download paths
+are constrained to files managed below the storage root; filenames are
+sanitized for response headers.
 
 Clip request:
 
@@ -443,6 +457,21 @@ external clients. The dashboard no longer depends on them. The media routes
 `/stream.m3u8`, `/hls/{filename}`, and `/stream.flv` remain active because the
 preview player consumes the media stream directly rather than through the
 JSON API.
+
+## Runtime and security notes
+
+RESTREAM_HTTP_ADDR and RESTREAM_HTTP_PORT control the HTTP listener;
+RESTREAM_PUBLIC_HOST controls advertised ingest URLs. Listener changes made
+through setup/config APIs return restartRequired: true. Runtime stream keys
+and configured output destinations are updated immediately, while the process
+must be restarted to move a bound listener.
+
+The main state file is config.state.json; credentials are encrypted in the
+adjacent config.state.secrets file using RESTREAM_STATE_KEY or the private
+generated config.state.key. Do not commit these files. Webhook URLs reject
+literal localhost/private targets, and media inputs reject private targets
+unless RESTREAM_ALLOW_PRIVATE_MEDIA_INPUTS=true is explicitly set. Deploy DNS
+and network egress controls as an additional defense against DNS rebinding.
 
 ## Client implementation guidance
 

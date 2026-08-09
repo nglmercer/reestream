@@ -888,11 +888,22 @@ async fn save_setup(
     };
 
     match reestream_core::setup::apply_setup(&state.config_path, &request) {
-        Ok(config) => ok(json!({
-            "rtmpAddr": config.rtmp_addr,
-            "rtmpPort": config.rtmp_port,
-            "platformCount": config.platform.as_ref().map_or(0, Vec::len),
-        })),
+        Ok(config) => {
+            state
+                .restream
+                .set_runtime_stream_key(config.stream_key.clone())
+                .await;
+            state
+                .restream
+                .set_runtime_platforms(config.platform.clone().unwrap_or_default())
+                .await;
+            ok(json!({
+                "rtmpAddr": config.rtmp_addr,
+                "rtmpPort": config.rtmp_port,
+                "platformCount": config.platform.as_ref().map_or(0, Vec::len),
+                "restartRequired": true,
+            }))
+        }
         Err(error) => bad_request(format!("setup failed: {error}")),
     }
 }
@@ -1737,14 +1748,13 @@ pub async fn start_event_recording(
     if !recording_manager.is_enabled() || store.recording_session(&event.id).await.is_some() {
         return None;
     }
-    let input_url = std::env::var("RESTREAM_RECORDING_INPUT_URL")
-        .unwrap_or_else(|_| {
-            let port = std::env::var("RESTREAM_HTTP_PORT")
-                .ok()
-                .and_then(|value| value.parse::<u16>().ok())
-                .unwrap_or(8080);
-            format!("http://127.0.0.1:{port}/stream.flv")
-        });
+    let input_url = std::env::var("RESTREAM_RECORDING_INPUT_URL").unwrap_or_else(|_| {
+        let port = std::env::var("RESTREAM_HTTP_PORT")
+            .ok()
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(8080);
+        format!("http://127.0.0.1:{port}/stream.flv")
+    });
     let recording_id = recording_manager
         .start_recording(&format!("event-{}", event.id), &input_url)
         .await

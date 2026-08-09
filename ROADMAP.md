@@ -1,22 +1,21 @@
 # Reestream Roadmap
 
-## Current Status (v0.3.0)
+## Current Status (v0.2.0, verified 2026-08-08)
 
 | Metric | Value |
 |--------|-------|
 | Crates | 5 (core, ffmpeg, server, srt, root) |
-| Rust source files | 36 |
-| Rust lines of code | ~8,500 |
-| Tests | 320 |
-| API endpoints | 90+ (legacy + `/api/v1`) |
+| Rust source files | 60 |
+| Tests | 403 (cargo test --workspace --all-features) |
+| API routes | 130+ (legacy + `/api/v1`) |
 | Feature flags | 8 |
-| Dashboard components | 10 |
+| Dashboard components | 18 |
 
 ### What's built
 
 **Core**
-- RTMP relay with multistream forwarding (RTMP/RTMPS)
-- SRT protocol (input listener, output sender, AES-128 encryption)
+- RTMP relay with multistream forwarding and RTMPS output support
+- SRT protocol (optional encrypted input listener and output sender)
 - SRT bridge (SRT→RTMP→HLS pipeline with stats)
 - RTSP input support (TCP/UDP transport, FFmpeg restream)
 - TLS/RTMPS support with reconnection logic
@@ -60,11 +59,13 @@
 - Auto-refresh polling
 
 **Security**
-- API token authentication
+- Optional bearer authentication with login throttling, refresh-token rotation,
+  in-memory sessions, and protected legacy control routes
+- AES-256-GCM encrypted state sidecar for channel/event/OAuth/webhook secrets
 - IP allowlist/blocklist (CIDR support)
 - Per-platform stream key validation
 - Rate limiting per IP
-- HTTPS-only mode
+- TLS-compatible outbound RTMPS; terminate HTTPS/RTMPS at a trusted proxy
 
 **Production**
 - Graceful shutdown (drain in-flight, configurable timeout)
@@ -72,7 +73,7 @@
 - Connection pool (max concurrent, RAII guard)
 - Max viewer limit per stream
 - Bandwidth limiting per stream
-- Config file watcher (hot-reload)
+- Config file watcher (change detection; listener changes require restart)
 - Signal handlers (SIGTERM, SIGINT, SIGHUP)
 - Fuzz tests (RTMP packet parsing, config, FLV tags, IP matching)
 - Stress tests (50 concurrent, rapid connect/disconnect, contention)
@@ -182,17 +183,16 @@ Options:
 
 ---
 
-## Test Coverage
+## Test Coverage (latest full-feature run)
 
 | Module | Tests |
 |--------|------:|
-| reestream-core | 142 |
+| reestream-core | 151 |
 | reestream-ffmpeg | 33 |
-| reestream-server | 51 |
-| reestream-srt | 27 |
-| reestream (root) | 10 |
-| integration tests | 57 |
-| **Total** | **320** |
+| reestream-server | 100 |
+| reestream-srt | 28 |
+| reestream + root integration tests | 91 |
+| **Total** | **403** |
 
 ---
 

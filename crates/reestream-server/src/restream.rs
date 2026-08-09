@@ -776,7 +776,9 @@ fn load_or_create_state_key(path: &Path) -> Option<Arc<[u8; 32]>> {
         if let Some(key) = decode_hex_key(&value) {
             return Some(Arc::new(key));
         }
-        warn!("RESTREAM_STATE_KEY must contain exactly 64 hexadecimal characters; using the sidecar key instead");
+        warn!(
+            "RESTREAM_STATE_KEY must contain exactly 64 hexadecimal characters; using the sidecar key instead"
+        );
     }
 
     let key_path = path.with_extension("key");

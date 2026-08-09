@@ -92,8 +92,7 @@ pub async fn perform_client_handshake(
     let c0_c1 = hs.generate_outbound_p0_and_p1()?;
     stream.write_all(&c0_c1).await?;
     let mut buf = [0u8; 4096];
-    let result: Result<(), Box<dyn std::error::Error + Send + Sync>> = async {
-        loop {
+    loop {
         let n = stream.read(&mut buf).await?;
         if n == 0 {
             return Err("EOF during client handshake".into());
@@ -198,7 +197,8 @@ pub async fn handle_publisher_with_resolver_and_status(
     let mut read_buf = [0u8; 8192];
     let mut registered_stream_id: Option<String> = None;
 
-    loop {
+    let result: Result<(), Box<dyn std::error::Error + Send + Sync>> = async {
+        loop {
         tokio::select! {
             Some((index, new_client)) = reconnect_rx.recv() => {
                 if index < push_clients.len() {
@@ -498,6 +498,7 @@ pub async fn handle_publisher_with_resolver_and_status(
             }
         }
         }
+        Ok(())
     }
     .await;
 

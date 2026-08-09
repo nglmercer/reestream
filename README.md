@@ -29,7 +29,8 @@ RTMP/SRT multistream relay server with HLS, HTTP-FLV, FFmpeg transcoding, REST A
 # Build with all features
 cargo build --release --features all
 
-# Create config
+# Create config (keep this file private; the setup wizard writes mode 0600)
+umask 077
 cat > config.toml <<EOF
 rtmp_addr = "0.0.0.0"
 rtmp_port = 1935
@@ -118,13 +119,56 @@ let toml = config.to_toml().unwrap();
 
 ## Services
 
-When running with `--features all`, three services start:
+When running with `--features all`, the RTMP and HTTP services start. The SRT
+listener starts only when it is explicitly enabled with a non-empty passphrase:
 
 | Service | Default Port | Description |
 |---------|-------------|-------------|
-| RTMP relay | 1935 | Accepts RTMP/RTMPS publish connections |
-| SRT listener | 3000 | Accepts SRT input streams |
+| RTMP relay | 1935 | Accepts authenticated RTMP publish connections |
+| SRT listener | 3000 | Optional encrypted SRT input; disabled by default |
 | HTTP server | 8080 | Dashboard, API, HLS, FLV, metrics |
+
+## Runtime and security configuration
+
+The following environment variables control deployment-specific behavior:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| RESTREAM_AUTH_REQUIRED | false | Require bearer authentication for private API, legacy control routes, WebSockets, and metrics |
+| RESTREAM_ADMIN_EMAIL | admin@localhost | Login email when authentication is enabled |
+| RESTREAM_ADMIN_PASSWORD | unset | Admin password; set this together with authentication in production |
+| RESTREAM_STATE_KEY | generated sidecar | 64 hexadecimal characters used to encrypt config.state.secrets |
+| RESTREAM_PUBLIC_HOST | localhost | Host advertised in ingest/setup URLs |
+| RESTREAM_HTTP_ADDR / RESTREAM_HTTP_PORT | 0.0.0.0:8080 | HTTP bind endpoint |
+| RESTREAM_HLS_DIR | storage/hls | HLS playlist and segment directory |
+| RESTREAM_FFMPEG_PATH | ffmpeg | FFmpeg executable path |
+| RESTREAM_MAX_UPLOAD_BYTES | 2147483648 | Maximum multipart upload size |
+| RESTREAM_ALLOW_PRIVATE_MEDIA_INPUTS | false | Allow recording inputs targeting localhost/private IPs |
+| RESTREAM_CORS_ORIGIN | disabled | Explicit browser CORS origin; CORS is disabled by default |
+| RESTREAM_SRT_ENABLED | false | Enable SRT only when RESTREAM_SRT_PASSPHRASE is also set |
+| RESTREAM_SRT_PASSPHRASE / RESTREAM_SRT_PORT | unset / 3000 | SRT encryption passphrase and listener port |
+| RESTREAM_RTMPS_URL | unset | External TLS-terminated RTMPS backup URL advertised by the setup/API |
+| RESTREAM_RECORDING_INPUT_URL | local HTTP-FLV | Override the input used by automatic event recording |
+| RESTREAM_RECORDING_ENABLED | true with the full server | Disable automatic event recording without removing the API |
+
+Sensitive product state is split between config.state.json and the AES-256-GCM
+encrypted config.state.secrets sidecar. The generated config.state.key is also
+private. Keep all three files owned by the service account; they are ignored
+by Git. Existing plaintext state is migrated on the next startup when the key
+is available.
+
+The first-run setup status and one-time setup save endpoints are public so the
+dashboard can bootstrap. After setup, private routes require a bearer token
+when authentication is enabled. Access and refresh sessions are held in
+memory by the server and refresh tokens rotate on use. Listener address/port
+changes are reported as restartRequired and take effect after a process
+restart; changing the runtime stream key and platform destinations is applied
+immediately.
+
+Destination URLs must use rtmp:// or rtmps:// and cannot contain embedded
+credentials. Webhook URLs are HTTP(S) only and reject literal private targets.
+Media inputs reject private targets unless explicitly enabled above. DNS
+rebinding protection should still be supplied by the deployment network policy.
 
 ## API Endpoints
 
@@ -143,7 +187,7 @@ can be connected directly with `/api/v1/channels`.
 |--------|------|-------------|
 | `GET` | `/health` | Health check (200 OK) |
 | `GET` | `/api/status` | Version, uptime, active streams, viewers |
-| `GET` | `/metrics` | Prometheus-format metrics |
+| `GET` | `/metrics` | Prometheus-format metrics (protected when auth is enabled) |
 
 ### Streams
 
@@ -500,7 +544,7 @@ use reestream::hardening::ConfigWatcher;
 ConfigWatcher::watch_loop(
     PathBuf::from("config.toml"),
     Duration::from_secs(5),
-    || println!("Config changed, reloading..."),
+    || println!("Config changed; restart the process to apply listener changes"),
 ).await;
 ```
 
@@ -542,7 +586,7 @@ cargo tarpaulin --workspace --out Html
 | Protocol | Input | Output |
 |----------|-------|--------|
 | RTMP | ✅ | ✅ |
-| RTMPS | ✅ | ✅ |
+| RTMPS | — | ✅ |
 | SRT | ✅ | ✅ |
 | HLS | — | ✅ |
 | HTTP-FLV | — | ✅ |
