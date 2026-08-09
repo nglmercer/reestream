@@ -5,12 +5,15 @@ import { useLocale } from '../hooks/useLocale';
 import { useVideoPlayer } from '../hooks/useVideoPlayer';
 import { CollapsiblePanel } from './CollapsiblePanel';
 import { Icon } from './Icon';
+import { ChannelConfigModal, type ChannelFormRequest } from './ChannelConfigModal';
 
 interface Props {
   event: Event;
   channels: Channel[];
   onBack: () => void;
-  onChannels: () => void;
+  onAddChannel: (request: ChannelFormRequest) => Promise<void>;
+  onUpdateChannel: (id: string, request: ChannelFormRequest) => Promise<void>;
+  onRemoveChannel: (id: string) => Promise<void>;
   onUpdate: (event: Event) => void;
 }
 
@@ -52,7 +55,7 @@ function maskKey(value: string | null): string {
   return `••••••••••••${value.slice(-5)}`;
 }
 
-export function StreamDetail({ event, channels, onBack, onChannels, onUpdate }: Props) {
+export function StreamDetail({ event, channels, onBack, onAddChannel, onUpdateChannel, onRemoveChannel, onUpdate }: Props) {
   const { t } = useLocale();
   const [credentials, setCredentials] = useState<EventCredentials | null>(null);
   const [srtCredentials, setSrtCredentials] = useState<SrtCredentials | null>(null);
@@ -64,6 +67,7 @@ export function StreamDetail({ event, channels, onBack, onChannels, onUpdate }: 
   const [recordingError, setRecordingError] = useState<string | null>(null);
   const [title, setTitle] = useState(event.title);
   const [savingTitle, setSavingTitle] = useState(false);
+  const [channelModal, setChannelModal] = useState<Channel | null | undefined>(undefined);
 
   useEffect(() => {
     setTitle(event.title);
@@ -167,6 +171,14 @@ export function StreamDetail({ event, channels, onBack, onChannels, onUpdate }: 
     onUpdate(updated);
   };
 
+  const saveChannel = async (request: ChannelFormRequest, channelId?: string) => {
+    if (channelId) {
+      await onUpdateChannel(channelId, request);
+    } else {
+      await onAddChannel(request);
+    }
+  };
+
   return (
     <div class="detail-page">
       <div class="detail-topbar">
@@ -208,17 +220,18 @@ export function StreamDetail({ event, channels, onBack, onChannels, onUpdate }: 
 
         <aside class="detail-channel-panel">
           <CollapsiblePanel title={t('detail.yourChannels')} summary={`${event.destinationIds.length} ${t('detail.paired')}`} className="channel-settings-panel">
-            <div class="channel-panel-actions"><button class="panel-action-button" onClick={onChannels}><Icon name="plus" size={16} />{t('detail.addChannel')}</button></div>
+            <div class="channel-panel-actions"><button class="panel-action-button" onClick={() => setChannelModal(null)}><Icon name="plus" size={16} />{t('detail.addChannel')}</button></div>
             <div class="channel-count"><span>{channels.filter((channel) => channel.enabled).length} {t('detail.active')}</span></div>
             <div class="detail-channel-list">
-              {channels.length === 0 ? <div class="panel-empty"><span>{t('home.noChannels')}</span><button onClick={onChannels}>{t('detail.addChannel')}</button></div> : channels.map((channel) => {
+              {channels.length === 0 ? <div class="panel-empty"><span>{t('home.noChannels')}</span><button onClick={() => setChannelModal(null)}>{t('detail.addChannel')}</button></div> : channels.map((channel) => {
                 const paired = selectedChannels.has(channel.id);
-                return <div key={channel.id} class="detail-channel-row"><span class="channel-avatar channel-avatar--0">{channel.displayName.slice(0, 1).toUpperCase()}</span><div class="detail-channel-copy"><strong>{channel.displayName}</strong><small>{channel.status || t('detail.noConnection')}</small>{channel.lastError && <em>{channel.lastError}</em>}</div><button class={`channel-toggle ${paired ? 'is-on' : ''}`} onClick={() => toggleChannel(channel).catch(() => {})}><span /></button></div>;
+                return <div key={channel.id} class="detail-channel-row"><span class="channel-avatar channel-avatar--0">{channel.displayName.slice(0, 1).toUpperCase()}</span><div class="detail-channel-copy"><strong>{channel.displayName}</strong><small>{channel.status || t('detail.noConnection')}</small>{channel.lastError && <em>{channel.lastError}</em>}</div><div class="detail-channel-actions"><button class="detail-channel-edit" onClick={() => setChannelModal(channel)} aria-label={t('channels.edit')}><Icon name="edit" size={14} /></button><button class={`channel-toggle ${paired ? 'is-on' : ''}`} onClick={() => toggleChannel(channel).catch(() => {})} aria-label={paired ? t('detail.on') : t('detail.off')}><span /></button></div></div>;
               })}
             </div>
           </CollapsiblePanel>
         </aside>
       </div>
+      {channelModal !== undefined && <ChannelConfigModal channel={channelModal} onClose={() => setChannelModal(undefined)} onSave={saveChannel} onRemove={onRemoveChannel} />}
     </div>
   );
 }

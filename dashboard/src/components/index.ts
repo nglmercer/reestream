@@ -13,4 +13,5 @@ export { HomePage } from './HomePage';
 export { CreateStreamDialog } from './CreateStreamDialog';
 export { StreamDetail } from './StreamDetail';
 export { ChannelsPage } from './ChannelsPage';
+export { ChannelConfigModal } from './ChannelConfigModal';
 export { CollapsiblePanel } from './CollapsiblePanel';

@@ -12,6 +12,7 @@ import { ChannelsPage } from './components/ChannelsPage';
 import { SetupWizard } from './components/SetupWizard';
 import { SettingsPanel } from './components/SettingsPanel';
 import type { ChannelUpdate, DashboardChannel } from './components/PlatformsTable';
+import type { ChannelFormRequest } from './components/ChannelConfigModal';
 
 const EVENTS_POLL = 10_000;
 const CHANNELS_POLL = 15_000;
@@ -57,7 +58,6 @@ export function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [realtimeEvents, setRealtimeEvents] = useState<Event[]>([]);
   const [wsInitialized, setWsInitialized] = useState(false);
-  const [platformCatalog, setPlatformCatalog] = useState<PlatformCatalogEntry[]>([]);
 
   const setRoute = useCallback((nextSection: DashboardSection, eventId: string | null = null) => {
     const nextPath = pathForRoute(nextSection, eventId);
@@ -99,7 +99,6 @@ export function App() {
   const eventsPoll = usePolling(() => apiV1.getEvents(), EVENTS_POLL);
   const channelsPoll = usePolling(async () => {
     const [channels, catalog] = await Promise.all([apiV1.getChannels(), apiV1.getPlatforms()]);
-    setPlatformCatalog(catalog);
     return channels.map((channel) => toDashboardChannel(channel, catalog));
   }, CHANNELS_POLL);
   const { connected: wsConnected } = useStreamWs({
@@ -164,11 +163,10 @@ export function App() {
     }
   }, [navigate, refreshEvents, selectedEventId, t]);
 
-  const addChannel = useCallback(async (name: string, url: string, key: string) => {
-    const catalogEntry = platformCatalog.find((platform) => platform.name.toLowerCase() === name.toLowerCase() || platform.slug.toLowerCase() === name.toLowerCase());
-    await apiV1.createChannel({ platformId: catalogEntry?.id ?? 'custom-rtmp', displayName: name, streamUrl: url, streamKey: key });
+  const addChannel = useCallback(async (request: ChannelFormRequest) => {
+    await apiV1.createChannel(request);
     refreshChannels();
-  }, [platformCatalog, refreshChannels]);
+  }, [refreshChannels]);
 
   const removeChannel = useCallback(async (id: string) => {
     await apiV1.deleteChannel(id);
@@ -179,6 +177,14 @@ export function App() {
     await apiV1.updateChannel(id, request);
     refreshChannels();
   }, [refreshChannels]);
+
+  const updateConfiguredChannel = useCallback(async (id: string, request: ChannelFormRequest) => {
+    await updateChannel(id, {
+      displayName: request.displayName,
+      streamUrl: request.streamUrl,
+      ...(request.streamKey ? { streamKey: request.streamKey } : {}),
+    });
+  }, [updateChannel]);
 
   const toggleChannel = useCallback(async (id: string, enabled: boolean) => {
     try {
@@ -192,7 +198,7 @@ export function App() {
   const channelWarning = channels.some((channel) => !!channel.lastError);
   const page = useMemo(() => {
     if (selectedEvent) {
-      return <StreamDetail event={selectedEvent} channels={channels} onBack={() => navigate('home')} onChannels={() => navigate('channels')} onUpdate={updateRealtimeEvent} />;
+      return <StreamDetail event={selectedEvent} channels={channels} onBack={() => navigate('home')} onAddChannel={addChannel} onUpdateChannel={updateConfiguredChannel} onRemoveChannel={removeChannel} onUpdate={updateRealtimeEvent} />;
     }
     if (section === 'home' || section === 'past') {
       return <HomePage events={events} channels={channels} loading={eventsPoll.loading} past={section === 'past'} onOpen={(event) => openEvent(event.id)} onCreate={() => setShowCreate(true)} onDuplicate={duplicateEvent} onDelete={deleteEvent} onChannels={() => navigate('channels')} onRefresh={refreshEvents} />;
@@ -201,7 +207,7 @@ export function App() {
       return <ChannelsPage channels={channels} loading={channelsPoll.loading} onRefresh={refreshChannels} onAdd={addChannel} onRemove={removeChannel} onUpdate={updateChannel} onToggle={toggleChannel} />;
     }
     return null;
-  }, [selectedEvent, section, events, channels, eventsPoll.loading, channelsPoll.loading, addChannel, removeChannel, updateChannel, toggleChannel, duplicateEvent, deleteEvent, updateRealtimeEvent, navigate, openEvent, refreshEvents]);
+  }, [selectedEvent, section, events, channels, eventsPoll.loading, channelsPoll.loading, addChannel, removeChannel, updateChannel, updateConfiguredChannel, toggleChannel, duplicateEvent, deleteEvent, updateRealtimeEvent, navigate, openEvent, refreshEvents]);
 
   if (needsSetup === true) return <SetupWizard />;
   if (needsSetup === null) return <div class="boot-screen"><div class="brand-mark"><span>✦</span></div><span>{t('common.loading')}</span></div>;

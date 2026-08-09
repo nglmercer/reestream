@@ -213,6 +213,8 @@ input::placeholder { color: var(--fg-faint); }
 .field-help { color: var(--fg-faint); font-size: 12px; font-weight: 400; }
 .modal-footer, .form-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 22px; }
 .form-error { display: flex; align-items: center; gap: 7px; margin: 5px 0; padding: 9px 10px; color: var(--danger); border-radius: 6px; background: var(--danger-bg); font-size: 12px; }
+.danger-button { min-height: 36px; display: inline-flex; align-items: center; gap: 7px; padding: 0 4px; color: var(--danger); border: 0; background: transparent; font-size: 12px; font-weight: 600; }
+.danger-button:hover { color: #ff8b8b; }
 .channel-picker { display: flex; flex-direction: column; gap: 4px; max-height: 155px; overflow: auto; padding: 5px; border: 1px solid var(--border-color); border-radius: 7px; background: var(--surface-input); }
 .channel-picker-item { display: flex; align-items: center; gap: 8px; padding: 6px 7px; color: var(--fg-secondary); border: 1px solid transparent; border-radius: 5px; background: transparent; text-align: left; font-size: 12px; }
 .channel-picker-item:hover, .channel-picker-item.is-selected { color: var(--fg); border-color: rgba(137,110,255,.45); background: var(--accent-bg); }
@@ -301,12 +303,49 @@ input::placeholder { color: var(--fg-faint); }
 .detail-channel-copy strong { overflow: hidden; color: #ececef; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .detail-channel-copy small { color: #7f7f88; font-size: 11px; }
 .detail-channel-copy em { overflow: hidden; color: #f18c8c; font-size: 10px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.detail-channel-actions { display: flex; align-items: center; gap: 7px; flex: 0 0 auto; }
+.detail-channel-edit { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; color: #85858d; border: 0; border-radius: 6px; background: transparent; }
+.detail-channel-edit:hover { color: #fff; background: #303034; }
 .channel-toggle { width: 34px; height: 20px; display: flex; align-items: center; padding: 3px; border: 0; border-radius: 999px; background: #3e3e42; }
 .channel-toggle span { width: 14px; height: 14px; display: block; border-radius: 50%; background: #bdbdc2; transition: .15s; }
 .channel-toggle.is-on { justify-content: flex-end; background: #6950df; }
 .channel-toggle.is-on span { background: #fff; }
 .panel-empty { display: flex; align-items: center; flex-direction: column; gap: 9px; padding: 40px 10px; color: #777780; font-size: 12px; text-align: center; }
 .panel-empty button { color: #a997ff; border: 0; background: transparent; font-size: 12px; }
+
+/* Channel configuration */
+.channel-config-backdrop { align-items: center; overflow-y: auto; }
+.channel-config-modal { width: min(100%, 650px); max-height: calc(100vh - 40px); overflow-y: auto; }
+.channel-config-header { margin-bottom: 18px; }
+.channel-config-header p { margin: 7px 0 0; color: var(--fg-muted); font-size: 12px; line-height: 1.45; }
+.channel-config-section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 9px; color: var(--fg-secondary); font-size: 12px; }
+.channel-config-section-heading span { color: var(--fg-faint); font-size: 11px; font-weight: 400; }
+.channel-template-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 21px; }
+.channel-template { min-width: 0; min-height: 58px; display: flex; align-items: center; gap: 10px; padding: 9px 10px; color: var(--fg-secondary); border: 1px solid var(--border-color); border-radius: 8px; background: var(--surface-input); text-align: left; transition: border-color .15s ease, background .15s ease, color .15s ease; }
+.channel-template:hover { color: var(--fg); border-color: var(--border-strong); background: var(--surface-hover); }
+.channel-template.is-selected { color: var(--fg); border-color: var(--accent); background: var(--accent-bg); box-shadow: 0 0 0 1px rgba(137,110,255,.18); }
+.channel-template > span:nth-child(2) { min-width: 0; display: flex; flex-direction: column; gap: 3px; flex: 1; }
+.channel-template strong { overflow: hidden; color: inherit; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.channel-template small { overflow: hidden; color: var(--fg-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.channel-template > svg { flex: 0 0 auto; color: var(--accent); }
+.channel-template-mark { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 30px; color: #fff; border-radius: 8px; background: #555; font-size: 9px; font-weight: 700; }
+.channel-template-mark--twitch { background: linear-gradient(135deg, #9146ff, #5b26bd); }
+.channel-template-mark--facebook { background: linear-gradient(135deg, #1877f2, #0d4da1); }
+.channel-template-mark--kick { background: linear-gradient(135deg, #52d628, #198e19); }
+.channel-template-mark--youtube { background: linear-gradient(135deg, #ff3d3d, #b40808); }
+.channel-template-mark--custom { background: linear-gradient(135deg, #686878, #34343d); }
+.channel-config-current { display: flex; align-items: center; gap: 10px; margin: 1px 0 20px; padding: 10px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--surface-input); }
+.channel-config-current > div { display: flex; flex-direction: column; gap: 3px; }
+.channel-config-current strong { color: var(--fg); font-size: 12px; }
+.channel-config-current small { color: var(--fg-muted); font-size: 11px; }
+.field-label-optional { color: var(--fg-faint); font-size: 10px; font-weight: 400; }
+.secret-input { display: flex; align-items: center; overflow: hidden; border: 1px solid var(--border-color); border-radius: 7px; background: var(--surface-input); }
+.secret-input:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); }
+.secret-input input { min-width: 0; height: 38px; flex: 1; padding: 0 11px; color: var(--fg); border: 0; outline: 0; background: transparent; font-size: 13px; }
+.secret-input button { width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 36px; color: var(--fg-muted); border: 0; border-left: 1px solid var(--border-color); background: transparent; }
+.secret-input button:hover { color: var(--fg); background: var(--surface-hover); }
+.channel-config-footer { align-items: center; }
+.channel-config-footer .form-actions { margin-top: 0; }
 
 /* Channels */
 .channels-page .page-heading { margin-bottom: 22px; }

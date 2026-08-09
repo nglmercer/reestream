@@ -4,6 +4,7 @@ export type IconName =
   | 'activity'
   | 'arrowLeft'
   | 'calendar'
+  | 'check'
   | 'chevronDown'
   | 'chevronRight'
   | 'circleHelp'
@@ -55,6 +56,8 @@ function shape(name: IconName): JSX.Element {
       return <><path {...common} d="M19 12H5m7 7-7-7 7-7" /></>;
     case 'calendar':
       return <><rect {...common} x="3" y="4.5" width="18" height="16" rx="2" /><path {...common} d="M16 2.5v4M8 2.5v4M3 9.5h18" /></>;
+    case 'check':
+      return <path {...common} d="m5 12 4.5 4.5L19 7" />;
     case 'chevronDown':
       return <path {...common} d="m6 9 6 6 6-6" />;
     case 'chevronRight':
