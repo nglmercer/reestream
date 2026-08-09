@@ -115,4 +115,22 @@ mod tests {
         assert_eq!(packet.stream_id, "test");
         assert!(packet.is_video);
     }
+
+    #[test]
+    fn test_data_bus_allows_one_active_stream_and_releases_it() {
+        let bus = DataBus::new();
+        let mut rx = bus.subscribe();
+        let publisher = &bus as &dyn reestream_core::client::DataPublisher;
+
+        assert!(publisher.try_activate_stream("first"));
+        assert!(!publisher.try_activate_stream("second"));
+        publisher.publish("second", Bytes::from_static(b"ignored"), true, 0);
+        publisher.publish("first", Bytes::from_static(b"accepted"), true, 1);
+        let packet = rx.try_recv().unwrap();
+        assert_eq!(packet.stream_id, "first");
+        assert_eq!(packet.data, Bytes::from_static(b"accepted"));
+
+        publisher.deactivate_stream("first");
+        assert!(publisher.try_activate_stream("second"));
+    }
 }

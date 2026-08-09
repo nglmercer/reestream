@@ -139,11 +139,11 @@ impl ConfigBuilder {
         if self.rtmp_port == 0 {
             return Err("rtmp_port cannot be 0".into());
         }
-        if self.rtmp_addr.is_empty() {
+        if self.rtmp_addr.trim().is_empty() {
             return Err("rtmp_addr cannot be empty".into());
         }
         for (i, p) in self.platforms.iter().enumerate() {
-            if p.key.is_empty() {
+            if p.key.trim().is_empty() {
                 return Err(format!("platform[{i}] key cannot be empty"));
             }
             if p.url.host().is_none() {
@@ -151,6 +151,9 @@ impl ConfigBuilder {
             }
             if !matches!(p.url.scheme(), "rtmp" | "rtmps") {
                 return Err(format!("platform[{i}] url must use rtmp:// or rtmps://"));
+            }
+            if !p.url.username().is_empty() || p.url.password().is_some() {
+                return Err(format!("platform[{i}] url cannot contain embedded credentials"));
             }
         }
         Ok(())
@@ -174,6 +177,29 @@ impl Config {
         }
         if self.rtmp_port == 0 {
             return Err("rtmp_port cannot be 0".into());
+        }
+        if self.rtmp_addr.trim().is_empty() {
+            return Err("rtmp_addr cannot be empty".into());
+        }
+        if let Some(platforms) = &self.platform {
+            for (i, platform) in platforms.iter().enumerate() {
+                if platform.key.trim().is_empty() {
+                    return Err(format!("platform[{i}] key cannot be empty"));
+                }
+                if platform.url.host().is_none() {
+                    return Err(format!("platform[{i}] url has no host"));
+                }
+                if !matches!(platform.url.scheme(), "rtmp" | "rtmps") {
+                    return Err(format!(
+                        "platform[{i}] url must use rtmp:// or rtmps://"
+                    ));
+                }
+                if !platform.url.username().is_empty() || platform.url.password().is_some() {
+                    return Err(format!(
+                        "platform[{i}] url cannot contain embedded credentials"
+                    ));
+                }
+            }
         }
         Ok(())
     }

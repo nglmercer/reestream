@@ -181,7 +181,9 @@ async fn state_file_round_trip_restores_channel_and_event_secrets() {
         .await;
     // Secrets are kept in the local control-plane snapshot so the relay can
     // recover after restart; HTTP serializers omit them from normal models.
-    assert!(std::fs::read_to_string(&state_path).is_ok());
+    let public_state = std::fs::read_to_string(&state_path).unwrap();
+    assert!(!public_state.contains("channel-secret"));
+    assert!(state_path.with_extension("secrets").exists());
 
     let restored = RestreamStore::with_state_path(&state_path);
     assert_eq!(
@@ -197,6 +199,13 @@ async fn state_file_round_trip_restores_channel_and_event_secrets() {
         event.ingest.stream_key
     );
     let _ = std::fs::remove_file(state_path);
+    let _ = std::fs::remove_file(
+        std::env::temp_dir().join(format!("reestream-api-state-{}.key", std::process::id())),
+    );
+    let _ = std::fs::remove_file(std::env::temp_dir().join(format!(
+        "reestream-api-state-{}.secrets",
+        std::process::id()
+    )));
 }
 
 #[tokio::test]
@@ -234,11 +243,7 @@ async fn v1_private_aliases_and_official_event_subresources_are_available() {
     )
     .await;
     assert_eq!(status, axum::http::StatusCode::OK);
-    assert!(
-        srt_keys["data"]["primary"]["url"]
-            .as_str()
-            .is_some_and(|url| url.starts_with("srt://") && url.contains("streamid="))
-    );
+    assert!(srt_keys["data"]["primary"].is_null());
 
     let (status, recording_error) = json_response(
         &mut app,

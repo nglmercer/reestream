@@ -190,7 +190,7 @@ pub fn apply_setup(
     config.validate()?;
 
     let toml_content = config.to_toml()?;
-    std::fs::write(config_path, toml_content)?;
+    write_config_file(config_path, &toml_content)?;
 
     Ok(config)
 }
@@ -239,7 +239,9 @@ pub fn get_server_info(config_path: &Path) -> Result<ServerInfo, Box<dyn std::er
     };
 
     let rtmp_url = format!("rtmp://{hostname}:{rtmp_port}");
-    let rtmps_url = Some(format!("rtmps://{hostname}:{rtmp_port}"));
+    let rtmps_url = std::env::var("RESTREAM_RTMPS_URL")
+        .ok()
+        .filter(|value| value.starts_with("rtmps://"));
     let srt_url = (std::env::var("RESTREAM_SRT_ENABLED")
         .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
@@ -411,7 +413,7 @@ pub fn remove_platform_from_config(
     Ok(true)
 }
 
-fn write_config_file(path: &Path, contents: &str) -> io::Result<()> {
+pub fn write_config_file(path: &Path, contents: &str) -> io::Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(parent)?;
     let file_name = path
@@ -420,10 +422,14 @@ fn write_config_file(path: &Path, contents: &str) -> io::Result<()> {
         .unwrap_or("config.toml");
     let temporary = parent.join(format!(".{file_name}.{}.tmp", uuid::Uuid::new_v4()));
     let result = (|| {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temporary)?;
         file.write_all(contents.as_bytes())?;
         file.sync_all()?;
         #[cfg(unix)]

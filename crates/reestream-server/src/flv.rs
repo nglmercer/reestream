@@ -188,6 +188,22 @@ mod tests {
         assert_eq!(data.len(), 600);
     }
 
+    #[tokio::test]
+    async fn test_flv_state_clear_removes_headers_and_segments() {
+        let state = FlvState::default();
+        state
+            .set_video_header(Bytes::from_static(b"video-header"))
+            .await;
+        state
+            .set_audio_header(Bytes::from_static(b"audio-header"))
+            .await;
+        state.push_data(Bytes::from_static(b"segment")).await;
+
+        state.clear().await;
+        let (recent, _) = state.subscribe_with_recent().await;
+        assert!(recent.is_empty());
+    }
+
     #[test]
     fn test_flv_header_signature() {
         let header = build_flv_header();

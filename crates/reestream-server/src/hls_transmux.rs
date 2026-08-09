@@ -212,8 +212,7 @@ mod tests {
     async fn test_which_ffmpeg() {
         let result = which_ffmpeg().await;
         // This test assumes ffmpeg is installed on the test system
-        if result.is_ok() {
-            let path = result.unwrap();
+        if let Ok(path) = result {
             assert!(!path.is_empty());
             assert!(path.contains("ffmpeg"));
         }

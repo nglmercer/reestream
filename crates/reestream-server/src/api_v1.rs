@@ -10,6 +10,7 @@ use axum::{
     body::Body,
     extract::{
         Multipart, Path, Query, State, WebSocketUpgrade,
+        multipart::Field,
         ws::{Message, WebSocket},
     },
     http::{HeaderMap, HeaderValue, Request, StatusCode, header},
@@ -112,6 +113,7 @@ fn bad_request(message: impl Into<String>) -> Response {
     error(StatusCode::BAD_REQUEST, "invalid_request", message)
 }
 
+#[allow(clippy::result_large_err)]
 fn parse_url(value: &str, field: &str) -> Result<(), Response> {
     let parsed =
         url::Url::parse(value).map_err(|_| bad_request(format!("{field} must be a URL")))?;
@@ -121,10 +123,18 @@ fn parse_url(value: &str, field: &str) -> Result<(), Response> {
     Ok(())
 }
 
+#[allow(clippy::result_large_err)]
 pub(crate) fn parse_destination_url(value: &str, field: &str) -> Result<(), Response> {
+    if value.len() > 2048 {
+        return Err(bad_request(format!("{field} is too long")));
+    }
     let parsed = url::Url::parse(value)
         .map_err(|_| bad_request(format!("{field} must be a valid RTMP URL")))?;
-    if !matches!(parsed.scheme(), "rtmp" | "rtmps") || parsed.host_str().is_none() {
+    if !matches!(parsed.scheme(), "rtmp" | "rtmps")
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
         return Err(bad_request(format!(
             "{field} must use rtmp:// or rtmps:// and include a host"
         )));
@@ -132,12 +142,18 @@ pub(crate) fn parse_destination_url(value: &str, field: &str) -> Result<(), Resp
     Ok(())
 }
 
+#[allow(clippy::result_large_err)]
 fn parse_http_url(value: &str, field: &str) -> Result<url::Url, Response> {
     let parsed = url::Url::parse(value)
         .map_err(|_| bad_request(format!("{field} must be a valid HTTP(S) URL")))?;
     if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
         return Err(bad_request(format!(
             "{field} must use http:// or https:// and include a host"
+        )));
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(bad_request(format!(
+            "{field} cannot contain embedded credentials"
         )));
     }
     if is_private_host(&parsed) {
@@ -148,6 +164,7 @@ fn parse_http_url(value: &str, field: &str) -> Result<url::Url, Response> {
     Ok(parsed)
 }
 
+#[allow(clippy::result_large_err)]
 pub(crate) fn validate_media_input_url(value: &str, field: &str) -> Result<(), Response> {
     if value.len() > 2048 {
         return Err(bad_request(format!("{field} is too long")));
@@ -175,25 +192,28 @@ pub(crate) fn validate_media_input_url(value: &str, field: &str) -> Result<(), R
 }
 
 fn is_private_host(parsed: &url::Url) -> bool {
-    if let Some(host) = parsed.host_str()
-        && (host.eq_ignore_ascii_case("localhost")
-            || host.ends_with(".localhost")
-            || host.ends_with(".local"))
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    if host.eq_ignore_ascii_case("localhost")
+        || host.ends_with(".localhost")
+        || host.ends_with(".local")
     {
         return true;
     }
-    parsed.host().is_some_and(|host| match host {
-        url::Host::Ipv4(ip) => {
-            ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified()
-        }
-        url::Host::Ipv6(ip) => {
-            ip.is_loopback()
-                || ip.is_unspecified()
-                || ip.is_unique_local()
-                || ip.is_unicast_link_local()
-        }
-        url::Host::Domain(_) => false,
-    })
+    host.parse::<std::net::IpAddr>()
+        .map(|ip| match ip {
+            std::net::IpAddr::V4(ip) => {
+                ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified()
+            }
+            std::net::IpAddr::V6(ip) => {
+                ip.is_loopback()
+                    || ip.is_unspecified()
+                    || ip.is_unique_local()
+                    || ip.is_unicast_link_local()
+            }
+        })
+        .unwrap_or(false)
 }
 
 async fn validate_destination_ids(store: &RestreamStore, ids: &[String]) -> Result<(), Response> {
@@ -217,6 +237,39 @@ fn max_upload_bytes() -> u64 {
         .unwrap_or(2 * 1024 * 1024 * 1024)
 }
 
+async fn multipart_text(field: &mut Field<'_>, max_bytes: usize) -> Result<String, String> {
+    let mut value = Vec::new();
+    while let Some(chunk) = field.chunk().await.map_err(|error| error.to_string())? {
+        if value.len().saturating_add(chunk.len()) > max_bytes {
+            return Err(format!(
+                "multipart text field exceeds the {max_bytes} byte limit"
+            ));
+        }
+        value.extend_from_slice(&chunk);
+    }
+    String::from_utf8(value).map_err(|_| "multipart text field must be UTF-8".into())
+}
+
+fn safe_download_filename(value: &str) -> String {
+    let safe: String = value
+        .chars()
+        .take(200)
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if safe.is_empty() {
+        "download".into()
+    } else {
+        safe
+    }
+}
+
+#[allow(clippy::result_large_err)]
 fn required(value: &str, field: &str) -> Result<String, Response> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -226,6 +279,7 @@ fn required(value: &str, field: &str) -> Result<String, Response> {
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn parse_stream_type(value: Option<&str>) -> Result<StreamType, Response> {
     match value.unwrap_or("encoder").to_ascii_lowercase().as_str() {
         "studio" => Ok(StreamType::Studio),
@@ -1290,10 +1344,10 @@ async fn update_channel(
     Path(id): Path<String>,
     Json(request): Json<UpdateChannelRequest>,
 ) -> Response {
-    if let Some(ref value) = request.stream_url {
-        if let Err(response) = parse_destination_url(value, "streamUrl") {
-            return response;
-        }
+    if let Some(ref value) = request.stream_url
+        && let Err(response) = parse_destination_url(value, "streamUrl")
+    {
+        return response;
     }
     if request
         .stream_key
@@ -1503,10 +1557,10 @@ async fn create_event(
             return bad_request("source file must be inside the storage root");
         }
     }
-    if let Some(draft_id) = request.draft_id.as_deref() {
-        if state.restream.get_draft(draft_id).await.is_none() {
-            return not_found("stream draft");
-        }
+    if let Some(draft_id) = request.draft_id.as_deref()
+        && state.restream.get_draft(draft_id).await.is_none()
+    {
+        return not_found("stream draft");
     }
     let destination_ids = request.destination_ids.unwrap_or_default();
     if let Err(response) = validate_destination_ids(&state.restream, &destination_ids).await {
@@ -1684,7 +1738,13 @@ pub async fn start_event_recording(
         return None;
     }
     let input_url = std::env::var("RESTREAM_RECORDING_INPUT_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:8080/stream.flv".into());
+        .unwrap_or_else(|_| {
+            let port = std::env::var("RESTREAM_HTTP_PORT")
+                .ok()
+                .and_then(|value| value.parse::<u16>().ok())
+                .unwrap_or(8080);
+            format!("http://127.0.0.1:{port}/stream.flv")
+        });
     let recording_id = recording_manager
         .start_recording(&format!("event-{}", event.id), &input_url)
         .await
@@ -2286,13 +2346,10 @@ async fn reply_chat(State(state): State<AppState>, Json(request): Json<ChatReque
 
 async fn relay_chat(State(state): State<AppState>, Json(request): Json<ChatRequest>) -> Response {
     let event_id = request.event_id.clone();
-    let message = match send_chat(State(state.clone()), Json(request))
+    let message = send_chat(State(state.clone()), Json(request))
         .await
         .into_response()
-        .into_body()
-    {
-        body => body,
-    };
+        .into_body();
     // The normal send operation is the source of truth.  A relay fan-out is
     // represented by one broadcast message with destinationId omitted.
     let _ = event_id;
@@ -2512,7 +2569,7 @@ async fn upload_file(State(state): State<AppState>, mut multipart: Multipart) ->
                 mime_type = content_type.to_string();
             }
             if name.is_none() {
-                name = field.file_name().map(ToOwned::to_owned);
+                name = field.file_name().map(safe_download_filename);
             }
             if let Some(parent) = temporary_path.parent()
                 && let Err(io_error) = tokio::fs::create_dir_all(parent).await
@@ -2565,19 +2622,19 @@ async fn upload_file(State(state): State<AppState>, mut multipart: Multipart) ->
                 }
             }
         } else if field_name == "name" {
-            match field.text().await {
+            match multipart_text(&mut field, 255).await {
                 Ok(value) => name = Some(value),
                 Err(error) => return bad_request(format!("invalid name: {error}")),
             }
-        } else if field_name == "labels" {
-            if let Ok(value) = field.text().await {
-                labels = value
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|label| !label.is_empty())
-                    .map(ToOwned::to_owned)
-                    .collect();
-            }
+        } else if field_name == "labels"
+            && let Ok(value) = multipart_text(&mut field, 4096).await
+        {
+            labels = value
+                .split(',')
+                .map(str::trim)
+                .filter(|label| !label.is_empty())
+                .map(ToOwned::to_owned)
+                .collect();
         }
     }
     let name = match name.filter(|value| !value.trim().is_empty()) {
@@ -2695,7 +2752,10 @@ async fn download_file(State(state): State<AppState>, Path(id): Path<String>) ->
         HeaderValue::from_str(&file.mime_type)
             .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
     );
-    if let Ok(value) = HeaderValue::from_str(&format!("attachment; filename=\"{}\"", file.name)) {
+    if let Ok(value) = HeaderValue::from_str(&format!(
+        "attachment; filename=\"{}\"",
+        safe_download_filename(&file.name)
+    )) {
         headers.insert(header::CONTENT_DISPOSITION, value);
     }
     let path = file.path.clone();
@@ -2909,11 +2969,11 @@ async fn end_studio_session(State(state): State<AppState>, Path(id): Path<String
         .await
         .into_iter()
         .find(|session| session.id == id);
-    if let Some(session) = session {
-        if let Some(event) = state.restream.end_event(&session.event_id).await {
-            finish_event_recording(&state.recording_manager, &state.restream, &event).await;
-            finish_event_playback(&state.playback_manager, &event.id).await;
-        }
+    if let Some(session) = session
+        && let Some(event) = state.restream.end_event(&session.event_id).await
+    {
+        finish_event_recording(&state.recording_manager, &state.restream, &event).await;
+        finish_event_playback(&state.playback_manager, &event.id).await;
     }
     match state
         .restream
@@ -3330,10 +3390,10 @@ async fn update_webhook(
     Path(id): Path<String>,
     Json(request): Json<WebhookRequest>,
 ) -> Response {
-    if let Some(ref url) = request.url {
-        if let Err(response) = parse_http_url(url, "url") {
-            return response;
-        }
+    if let Some(ref url) = request.url
+        && let Err(response) = parse_http_url(url, "url")
+    {
+        return response;
     }
     match state
         .restream
@@ -3538,6 +3598,16 @@ mod tests {
             Ok(StreamType::Studio)
         ));
         assert!(parse_stream_type(Some("unknown")).is_err());
+    }
+
+    #[test]
+    fn test_external_url_validation_rejects_local_targets() {
+        assert!(parse_http_url("https://example.test/hook", "url").is_ok());
+        assert!(parse_http_url("http://127.0.0.1:8080/hook", "url").is_err());
+        assert!(is_private_host(
+            &url::Url::parse("rtmp://127.0.0.1:1935/live").unwrap()
+        ));
+        assert!(validate_media_input_url("rtmp://127.0.0.1:1935/live", "inputUrl").is_err());
     }
 
     #[test]

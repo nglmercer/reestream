@@ -42,11 +42,11 @@ fn scheduled_epoch(value: &str) -> Option<u64> {
     let year = date_parts.next()?.parse::<i64>().ok()?;
     let month = date_parts.next()?.parse::<i64>().ok()?;
     let day = date_parts.next()?.parse::<i64>().ok()?;
-    if !(1..=12).contains(&month) || day < 1 || day > 31 {
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
         return None;
     }
 
-    let zone_start = clock.find(|character: char| matches!(character, 'Z' | '+' | '-'));
+    let zone_start = clock.find(['Z', '+', '-']);
     let (clock, zone) = match zone_start {
         Some(index) => (&clock[..index], &clock[index..]),
         None => (clock, "Z"),
@@ -236,35 +236,25 @@ pub fn ingest_servers_for_url(rtmp_url: &str) -> Vec<IngestServer> {
     ]
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum StreamType {
     Studio,
+    #[default]
     Encoder,
     File,
     Playlist,
 }
 
-impl Default for StreamType {
-    fn default() -> Self {
-        Self::Encoder
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum EventStatus {
+    #[default]
     Draft,
     Scheduled,
     Live,
     Ended,
     Cancelled,
-}
-
-impl Default for EventStatus {
-    fn default() -> Self {
-        Self::Draft
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -724,6 +714,8 @@ pub struct RuntimeIngestConfig {
     pub stream_key: String,
 }
 
+type OAuthState = (String, String, u64, String);
+
 impl Default for RuntimeIngestConfig {
     fn default() -> Self {
         Self {
@@ -784,8 +776,7 @@ fn load_or_create_state_key(path: &Path) -> Option<Arc<[u8; 32]>> {
         if let Some(key) = decode_hex_key(&value) {
             return Some(Arc::new(key));
         }
-        warn!("RESTREAM_STATE_KEY must contain exactly 64 hexadecimal characters");
-        return None;
+        warn!("RESTREAM_STATE_KEY must contain exactly 64 hexadecimal characters; using the sidecar key instead");
     }
 
     let key_path = path.with_extension("key");
@@ -909,10 +900,14 @@ fn atomic_write(path: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()> {
         .unwrap_or("state");
     let temporary = parent.join(format!(".{file_name}.{}.tmp", Uuid::new_v4()));
     let result = (|| {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(mode);
+        }
+        let mut file = options.open(&temporary)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         #[cfg(unix)]
@@ -947,7 +942,7 @@ pub struct RestreamStore {
     storage_root: Arc<PathBuf>,
     persist_lock: Arc<Mutex<()>>,
     recording_sessions: Arc<RwLock<HashMap<String, String>>>,
-    oauth_states: Arc<RwLock<HashMap<String, (String, String, u64, String)>>>,
+    oauth_states: Arc<RwLock<HashMap<String, OAuthState>>>,
     login_throttle: Arc<Mutex<HashMap<String, LoginThrottle>>>,
     auth: Arc<AuthConfig>,
     runtime_config: Arc<RwLock<RuntimeIngestConfig>>,
@@ -1150,6 +1145,12 @@ impl RestreamStore {
         self.runtime_config.write().await.stream_key = stream_key.into();
     }
 
+    pub async fn set_runtime_platforms(&self, platforms: Vec<Platform>) {
+        if let Some(runtime_platforms) = &self.runtime_platforms {
+            *runtime_platforms.write().await = platforms;
+        }
+    }
+
     pub async fn set_channel_status(
         &self,
         destination_id: &str,
@@ -1227,10 +1228,10 @@ impl RestreamStore {
         let throttle_key = email.trim().to_ascii_lowercase();
         {
             let throttles = self.login_throttle.lock().await;
-            if let Some(throttle) = throttles.get(&throttle_key) {
-                if throttle.blocked_until > now() {
-                    return Err("invalid credentials".into());
-                }
+            if let Some(throttle) = throttles.get(&throttle_key)
+                && throttle.blocked_until > now()
+            {
+                return Err("invalid credentials".into());
             }
         }
 
@@ -1441,6 +1442,7 @@ impl RestreamStore {
         Some(channel)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_channel(
         &self,
         platform_id: String,
@@ -1534,14 +1536,13 @@ impl RestreamStore {
             })
             .await;
         if let Some(ref channel) = updated {
-            if let Some(previous) = previous {
-                if previous.stream_url != channel.stream_url
-                    || previous.stream_key != channel.stream_key
-                {
-                    let _ = self.platform_event_tx.send(PlatformEvent::Removed {
-                        platform_id: platform_id_from(&previous.stream_url, &previous.stream_key),
-                    });
-                }
+            if let Some(previous) = previous
+                && (previous.stream_url != channel.stream_url
+                    || previous.stream_key != channel.stream_key)
+            {
+                let _ = self.platform_event_tx.send(PlatformEvent::Removed {
+                    platform_id: platform_id_from(&previous.stream_url, &previous.stream_key),
+                });
             }
             let _ = self.platform_event_tx.send(PlatformEvent::Added {
                 platform_id: platform_id_from(&channel.stream_url, &channel.stream_key),
@@ -1570,12 +1571,10 @@ impl RestreamStore {
                 data.channels.len() != before
             })
             .await;
-        if removed {
-            if let Some(channel) = removed_channel {
-                let _ = self.platform_event_tx.send(PlatformEvent::Removed {
-                    platform_id: platform_id_from(&channel.stream_url, &channel.stream_key),
-                });
-            }
+        if removed && let Some(channel) = removed_channel {
+            let _ = self.platform_event_tx.send(PlatformEvent::Removed {
+                platform_id: platform_id_from(&channel.stream_url, &channel.stream_key),
+            });
         }
         removed
     }
@@ -1661,6 +1660,7 @@ impl RestreamStore {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_event(
         &self,
         draft_id: Option<String>,
@@ -1732,7 +1732,7 @@ impl RestreamStore {
         if let Some(status) = status {
             events.retain(|event| event.status == status);
         }
-        events.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        events.sort_by_key(|event| std::cmp::Reverse(event.updated_at));
         events
     }
 
@@ -1950,7 +1950,7 @@ impl RestreamStore {
                         .any(|label| label.to_lowercase().contains(&query))
             });
         }
-        files.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        files.sort_by_key(|file| std::cmp::Reverse(file.updated_at));
         files
     }
 
@@ -1985,6 +1985,7 @@ impl RestreamStore {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_file_metadata_with_status(
         &self,
         name: String,
@@ -2029,9 +2030,7 @@ impl RestreamStore {
     }
 
     pub async fn list_transcriptions(&self, event_id: &str) -> Option<Vec<Transcription>> {
-        if self.get_event(event_id).await.is_none() {
-            return None;
-        }
+        self.get_event(event_id).await.as_ref()?;
         Some(
             self.data
                 .read()
@@ -2151,9 +2150,7 @@ impl RestreamStore {
     }
 
     pub async fn link_event_recording(&self, event_id: &str, file_id: &str) -> Option<Event> {
-        if self.get_file(file_id).await.is_none() {
-            return None;
-        }
+        self.get_file(file_id).await.as_ref()?;
         let event = self
             .mutate(|data| {
                 let event = data.events.iter_mut().find(|event| event.id == event_id)?;
@@ -2238,14 +2235,15 @@ impl RestreamStore {
                 Some(data.files.remove(index))
             })
             .await;
-        if let Some(ref file) = file {
-            if self.is_managed_storage_path(&file.path) {
-                let _ = tokio::fs::remove_file(&file.path).await;
-            }
+        if let Some(ref file) = file
+            && self.is_managed_storage_path(&file.path)
+        {
+            let _ = tokio::fs::remove_file(&file.path).await;
         }
         file
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn add_chat_message(
         &self,
         event_id: String,
@@ -2455,69 +2453,67 @@ impl RestreamStore {
         };
         self.mutate(|data| data.clips.push(clip.clone())).await;
 
-        if let Some(source_file) = source_file {
-            if self.is_managed_storage_path(&source_file.path) {
-                let store = self.clone();
-                let clip_id = clip.id.clone();
-                let output_name = format!("{}-clip.mp4", clip.name);
-                let output_path = self.storage_path(&clip_id, &output_name);
-                let duration = end_seconds.saturating_sub(start_seconds);
-                tokio::spawn(async move {
-                    let Some(parent) = output_path.parent() else {
-                        return;
-                    };
-                    if tokio::fs::create_dir_all(parent).await.is_err() {
-                        store.mark_clip_failed(&clip_id).await;
-                        return;
-                    }
-                    let succeeded = tokio::process::Command::new(ffmpeg_command())
-                        .args([
-                            "-y",
-                            "-ss",
-                            &start_seconds.to_string(),
-                            "-i",
-                            &source_file.path,
-                            "-t",
-                            &duration.to_string(),
-                            "-c",
-                            "copy",
-                        ])
-                        .arg(&output_path)
-                        .status()
-                        .await
-                        .map(|status| status.success())
-                        .unwrap_or(false);
-                    if !succeeded {
-                        store.mark_clip_failed(&clip_id).await;
-                        return;
-                    }
-                    let size_bytes = tokio::fs::metadata(&output_path)
-                        .await
-                        .map(|metadata| metadata.len())
-                        .unwrap_or(0);
-                    let file = store
-                        .create_file_metadata(
-                            output_name,
-                            "video/mp4".into(),
-                            size_bytes,
-                            Some(duration),
-                            vec!["clip".into()],
-                            output_path.to_string_lossy().into(),
-                        )
-                        .await;
-                    store
-                        .mutate(|data| {
-                            if let Some(clip) =
-                                data.clips.iter_mut().find(|clip| clip.id == clip_id)
-                            {
-                                clip.status = "ready".into();
-                                clip.output_file_id = Some(file.id.clone());
-                                clip.updated_at = now();
-                            }
-                        })
-                        .await;
-                });
-            }
+        if let Some(source_file) = source_file
+            && self.is_managed_storage_path(&source_file.path)
+        {
+            let store = self.clone();
+            let clip_id = clip.id.clone();
+            let output_name = format!("{}-clip.mp4", clip.name);
+            let output_path = self.storage_path(&clip_id, &output_name);
+            let duration = end_seconds.saturating_sub(start_seconds);
+            tokio::spawn(async move {
+                let Some(parent) = output_path.parent() else {
+                    return;
+                };
+                if tokio::fs::create_dir_all(parent).await.is_err() {
+                    store.mark_clip_failed(&clip_id).await;
+                    return;
+                }
+                let succeeded = tokio::process::Command::new(ffmpeg_command())
+                    .args([
+                        "-y",
+                        "-ss",
+                        &start_seconds.to_string(),
+                        "-i",
+                        &source_file.path,
+                        "-t",
+                        &duration.to_string(),
+                        "-c",
+                        "copy",
+                    ])
+                    .arg(&output_path)
+                    .status()
+                    .await
+                    .map(|status| status.success())
+                    .unwrap_or(false);
+                if !succeeded {
+                    store.mark_clip_failed(&clip_id).await;
+                    return;
+                }
+                let size_bytes = tokio::fs::metadata(&output_path)
+                    .await
+                    .map(|metadata| metadata.len())
+                    .unwrap_or(0);
+                let file = store
+                    .create_file_metadata(
+                        output_name,
+                        "video/mp4".into(),
+                        size_bytes,
+                        Some(duration),
+                        vec!["clip".into()],
+                        output_path.to_string_lossy().into(),
+                    )
+                    .await;
+                store
+                    .mutate(|data| {
+                        if let Some(clip) = data.clips.iter_mut().find(|clip| clip.id == clip_id) {
+                            clip.status = "ready".into();
+                            clip.output_file_id = Some(file.id.clone());
+                            clip.updated_at = now();
+                        }
+                    })
+                    .await;
+            });
         }
         Some(clip)
     }
@@ -2537,7 +2533,7 @@ impl RestreamStore {
         if let Some(event_id) = event_id {
             clips.retain(|clip| clip.event_id == event_id);
         }
-        clips.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        clips.sort_by_key(|clip| std::cmp::Reverse(clip.updated_at));
         clips
     }
 
@@ -2572,9 +2568,7 @@ impl RestreamStore {
         {
             return Some(session);
         }
-        if self.get_event(event_id).await.is_none() {
-            return None;
-        }
+        self.get_event(event_id).await.as_ref()?;
         let timestamp = now();
         let session = StudioSession {
             id: id(),
@@ -2636,18 +2630,16 @@ impl RestreamStore {
             status: "invited".into(),
             created_at: now(),
         };
-        let added = self
-            .mutate(|data| {
-                let session = data
-                    .studio_sessions
-                    .iter_mut()
-                    .find(|session| session.id == session_id)?;
-                session.guests.push(guest.clone());
-                session.updated_at = now();
-                Some(guest.clone())
-            })
-            .await;
-        added
+        self.mutate(|data| {
+            let session = data
+                .studio_sessions
+                .iter_mut()
+                .find(|session| session.id == session_id)?;
+            session.guests.push(guest.clone());
+            session.updated_at = now();
+            Some(guest.clone())
+        })
+        .await
     }
 
     pub async fn remove_guest(&self, session_id: &str, guest_id: &str) -> bool {

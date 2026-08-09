@@ -250,6 +250,10 @@ async fn update_config(
         .restream
         .set_runtime_stream_key(config.stream_key.clone())
         .await;
+    state
+        .restream
+        .set_runtime_platforms(config.platform.clone().unwrap_or_default())
+        .await;
     info!("Config updated via API");
     axum::Json(ApiResponse::ok(serde_json::json!({
         "rtmp_addr": config.rtmp_addr,
@@ -311,6 +315,10 @@ async fn setup_save(
     state
         .restream
         .set_runtime_stream_key(config.stream_key.clone())
+        .await;
+    state
+        .restream
+        .set_runtime_platforms(config.platform.clone().unwrap_or_default())
         .await;
     info!("Configuration saved via setup wizard");
     (

@@ -173,12 +173,10 @@ impl StreamManager {
         let len_before = platforms.len();
         platforms.retain(|p| p.id != id);
         let removed = platforms.len() < len_before;
-        if removed {
-            if let Some(pid) = platform_id {
-                let _ = self
-                    .platform_event_tx
-                    .send(PlatformEvent::Removed { platform_id: pid });
-            }
+        if removed && let Some(pid) = platform_id {
+            let _ = self
+                .platform_event_tx
+                .send(PlatformEvent::Removed { platform_id: pid });
         }
         removed
     }

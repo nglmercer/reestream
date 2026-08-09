@@ -92,7 +92,8 @@ pub async fn perform_client_handshake(
     let c0_c1 = hs.generate_outbound_p0_and_p1()?;
     stream.write_all(&c0_c1).await?;
     let mut buf = [0u8; 4096];
-    loop {
+    let result: Result<(), Box<dyn std::error::Error + Send + Sync>> = async {
+        loop {
         let n = stream.read(&mut buf).await?;
         if n == 0 {
             return Err("EOF during client handshake".into());
@@ -157,6 +158,7 @@ pub async fn handle_publisher_with_resolver(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_publisher_with_resolver_and_status(
     mut inbound: TcpStream,
     platforms: Arc<RwLock<Vec<Platform>>>,
@@ -325,26 +327,6 @@ pub async fn handle_publisher_with_resolver_and_status(
                 let n = match n_res {
                     Ok(0) => {
                         info!("Source stream ended (EOF). Shutting down push clients gracefully...");
-                        // Unregister stream
-                        if let (Some(registrar), Some(id)) = (&stream_manager, &registered_stream_id) {
-                            if let Some(pubber) = &data_publisher {
-                                pubber.deactivate_stream(id);
-                            }
-                            registrar.unregister_stream(id).await;
-                            info!("Unregistered stream: {}", id);
-                        }
-                        for (i, pc) in push_clients.iter().enumerate() {
-                            report_destination_status(
-                                &status_reporter,
-                                &pc.platform_id,
-                                "disconnected",
-                                None,
-                            )
-                            .await;
-                            info!("Stopping client {}", i);
-                            pc.shutdown().await;
-                        }
-                        push_clients.clear();
                         break;
                     },
                     Ok(n) => n,
@@ -515,8 +497,26 @@ pub async fn handle_publisher_with_resolver_and_status(
                 }
             }
         }
+        }
     }
-    Ok(())
+    .await;
+
+    if let Some(id) = registered_stream_id.take() {
+        if let Some(pubber) = &data_publisher {
+            pubber.deactivate_stream(&id);
+        }
+        if let Some(registrar) = &stream_manager {
+            registrar.unregister_stream(&id).await;
+        }
+        info!("Unregistered stream: {}", id);
+    }
+    for (i, pc) in push_clients.iter().enumerate() {
+        report_destination_status(&status_reporter, &pc.platform_id, "disconnected", None).await;
+        info!("Stopping client {}", i);
+        pc.shutdown().await;
+    }
+    push_clients.clear();
+    result
 }
 
 async fn forward_to_push_clients(

@@ -114,7 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .stream_key("")
             .build();
         let toml = default_config.to_toml()?;
-        std::fs::write(&args.config, toml)?;
+        reestream::setup::write_config_file(&args.config, &toml)?;
         eprintln!(
             "Created minimal config at '{}' — starting server for web setup.",
             args.config.display()

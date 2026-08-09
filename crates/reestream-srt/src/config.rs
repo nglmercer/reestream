@@ -113,6 +113,15 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_enabled_requires_passphrase() {
+        let config = SrtConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
     fn test_validate_valid_passphrase() {
         let config = SrtConfig {
             passphrase: Some("longenoughpassphrase".into()),
