@@ -165,6 +165,31 @@ struct ListQuery {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct SetupSaveRequest {
+    rtmp_addr: Option<String>,
+    rtmp_port: Option<u16>,
+    stream_key: String,
+    platforms: Vec<SetupPlatformRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetupPlatformRequest {
+    name: String,
+    url: String,
+    key: String,
+    orientation: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StartRecordingRequest {
+    stream_id: String,
+    input_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct LoginRequest {
     email: String,
     password: String,
@@ -393,6 +418,7 @@ fn protected_routes(state: AppState) -> Router<AppState> {
         .route("/api/v1/ingest", get(selected_ingest))
         .route("/api/v1/user/ingest", get(selected_ingest))
         .route("/api/v1/stream-key", get(global_stream_key))
+        .route("/api/v1/stream-key/reset", post(reset_global_stream_key))
         .route("/api/v1/user/streamKey", get(global_stream_key))
         .route("/api/v1/chat-url", get(chat_url))
         .route("/api/v1/user/webchat/url", get(chat_url))
@@ -479,6 +505,12 @@ fn protected_routes(state: AppState) -> Router<AppState> {
         .route("/api/v1/chat/relay", post(relay_chat))
         .route("/api/v1/chat/ws", get(chat_ws))
         .route("/api/v1/streaming/ws", get(streaming_ws))
+        .route(
+            "/api/v1/recordings",
+            get(list_product_recordings).post(start_product_recording),
+        )
+        .route("/api/v1/recordings/{id}/stop", post(stop_product_recording))
+        .route("/api/v1/recordings/{id}", delete(delete_product_recording))
         .route("/api/v1/analytics/overview", get(analytics_overview))
         .route("/api/v1/analytics/timeseries", get(analytics_timeseries))
         .route("/api/v1/storage/files", get(list_files).post(upload_file))
@@ -574,7 +606,10 @@ fn protected_routes(state: AppState) -> Router<AppState> {
 pub fn routes(state: AppState) -> Router<AppState> {
     let public = Router::new()
         .route("/api/v1/health", get(health))
+        .route("/api/v1/status", get(dashboard_status))
         .route("/api/v1/openapi.json", get(openapi))
+        .route("/api/v1/setup/status", get(setup_status))
+        .route("/api/v1/setup", post(save_setup))
         .route("/api/v1/platforms", get(list_platform_catalog))
         .route("/api/v1/ingest-servers", get(list_ingest_servers))
         .route("/api/v1/servers", get(list_ingest_servers))
@@ -619,6 +654,57 @@ fn query_access_token(query: Option<&str>) -> Option<&str> {
 
 async fn health() -> Response {
     ok(json!({"status": "ok", "version": env!("CARGO_PKG_VERSION"), "timestamp": now()}))
+}
+
+async fn dashboard_status(State(state): State<AppState>) -> Response {
+    let streams = state.stream_manager.get_streams().await;
+    let total_viewers: u32 = streams.iter().map(|stream| stream.viewers).sum();
+    ok(json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "uptimeSeconds": state.start_time.elapsed().as_secs(),
+        "activeStreams": streams.len(),
+        "totalViewers": total_viewers,
+    }))
+}
+
+async fn setup_status(State(state): State<AppState>) -> Response {
+    let status = reestream_core::setup::get_setup_status(&state.config_path);
+    ok(json!({
+        "firstRun": status.first_run,
+        "configExists": status.config_exists,
+        "hasStreamKey": status.has_stream_key,
+        "platformCount": status.platform_count,
+    }))
+}
+
+async fn save_setup(
+    State(state): State<AppState>,
+    Json(request): Json<SetupSaveRequest>,
+) -> Response {
+    let request = reestream_core::setup::SetupRequest {
+        rtmp_addr: request.rtmp_addr,
+        rtmp_port: request.rtmp_port,
+        stream_key: request.stream_key,
+        platforms: request
+            .platforms
+            .into_iter()
+            .map(|platform| reestream_core::setup::SetupPlatform {
+                name: platform.name,
+                url: platform.url,
+                key: platform.key,
+                orientation: platform.orientation,
+            })
+            .collect(),
+    };
+
+    match reestream_core::setup::apply_setup(&state.config_path, &request) {
+        Ok(config) => ok(json!({
+            "rtmpAddr": config.rtmp_addr,
+            "rtmpPort": config.rtmp_port,
+            "platformCount": config.platform.as_ref().map_or(0, Vec::len),
+        })),
+        Err(error) => bad_request(format!("setup failed: {error}")),
+    }
 }
 
 async fn openapi() -> Response {
@@ -692,6 +778,20 @@ async fn global_stream_key(State(state): State<AppState>) -> Response {
             StatusCode::INTERNAL_SERVER_ERROR,
             "config_unavailable",
             read_error.to_string(),
+        ),
+    }
+}
+
+async fn reset_global_stream_key(State(state): State<AppState>) -> Response {
+    match reestream_core::setup::reset_stream_key(&state.config_path) {
+        Ok(stream_key) => ok(json!({
+            "streamKey": stream_key,
+            "srtUrl": "srt://localhost:3000?streamid=local",
+        })),
+        Err(reset_error) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "config_unavailable",
+            reset_error.to_string(),
         ),
     }
 }
@@ -1996,6 +2096,69 @@ async fn analytics_timeseries(
     }
 }
 
+fn public_recording(recording: crate::recording::RecordingInfo) -> Value {
+    let status = match recording.status {
+        crate::recording::RecordingStatus::Recording => "recording",
+        crate::recording::RecordingStatus::Stopped => "completed",
+        crate::recording::RecordingStatus::Error => "failed",
+    };
+    json!({
+        "id": recording.id,
+        "streamId": recording.stream_id,
+        "filename": recording.filename,
+        "format": format!("{:?}", recording.format).to_ascii_lowercase(),
+        "startedAt": recording.started_at,
+        "sizeBytes": recording.size_bytes,
+        "status": status,
+    })
+}
+
+async fn list_product_recordings(State(state): State<AppState>) -> Response {
+    let recordings = state
+        .recording_manager
+        .list_recordings()
+        .await
+        .into_iter()
+        .map(public_recording)
+        .collect::<Vec<_>>();
+    ok(recordings)
+}
+
+async fn start_product_recording(
+    State(state): State<AppState>,
+    Json(request): Json<StartRecordingRequest>,
+) -> Response {
+    match state
+        .recording_manager
+        .start_recording(&request.stream_id, &request.input_url)
+        .await
+    {
+        Ok(id) => created(json!({ "id": id })),
+        Err(message) => error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "recording_failed",
+            message,
+        ),
+    }
+}
+
+async fn stop_product_recording(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    match state.recording_manager.stop_recording(&id).await {
+        Ok(()) => ok(json!({ "id": id, "status": "completed" })),
+        Err(message) => not_found(&message),
+    }
+}
+
+async fn delete_product_recording(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Response {
+    match state.recording_manager.delete_recording(&id).await {
+        Ok(()) => ok(json!({ "deleted": true, "id": id })),
+        Err(message) => not_found(&message),
+    }
+}
+
 async fn list_files(State(state): State<AppState>, query: Query<ListQuery>) -> Response {
     list(
         state
@@ -2839,7 +3002,10 @@ async fn test_webhook(State(state): State<AppState>, Path(id): Path<String>) -> 
 fn openapi_document() -> Value {
     let paths = [
         "/api/v1/health",
+        "/api/v1/status",
         "/api/v1/openapi.json",
+        "/api/v1/setup/status",
+        "/api/v1/setup",
         "/api/v1/auth/login",
         "/api/v1/auth/refresh",
         "/api/v1/auth/logout",
@@ -2849,6 +3015,7 @@ fn openapi_document() -> Value {
         "/api/v1/ingest",
         "/api/v1/user/ingest",
         "/api/v1/stream-key",
+        "/api/v1/stream-key/reset",
         "/api/v1/user/streamKey",
         "/api/v1/chat-url",
         "/api/v1/user/webchat/url",
@@ -2897,6 +3064,9 @@ fn openapi_document() -> Value {
         "/api/v1/chat/relay",
         "/api/v1/chat/ws",
         "/api/v1/streaming/ws",
+        "/api/v1/recordings",
+        "/api/v1/recordings/{id}/stop",
+        "/api/v1/recordings/{id}",
         "/api/v1/analytics/overview",
         "/api/v1/analytics/timeseries",
         "/api/v1/storage/files",

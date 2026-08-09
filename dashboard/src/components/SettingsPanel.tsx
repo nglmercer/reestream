@@ -1,6 +1,24 @@
 import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
-import type { ServerInfo } from '../api';
+import { apiV1 } from '../api';
 import { useLocale } from '../hooks/useLocale';
+
+interface ServerInfoView {
+  rtmpUrl: string;
+  rtmpsUrl: string;
+  srtUrl: string | null;
+  hlsUrl: string;
+  flvUrl: string;
+  dashboardUrl: string;
+  apiUrl: string;
+  metricsUrl: string;
+  streamKeyMasked: string;
+}
+
+function maskKey(key: string | undefined): string {
+  if (!key) return '****';
+  if (key.length <= 4) return '****';
+  return `${key.slice(0, 4)}…${key.slice(-4)}`;
+}
 
 interface Props {
   onClose: () => void;
@@ -9,7 +27,7 @@ interface Props {
 
 export function SettingsPanel({ onClose, addLog }: Props) {
   const { t } = useLocale();
-  const [info, setInfo] = useState<ServerInfo | null>(null);
+  const [info, setInfo] = useState<ServerInfoView | null>(null);
   const [streamKey, setStreamKey] = useState<string | null>(null);
   const [showKey, setShowKey] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -18,15 +36,32 @@ export function SettingsPanel({ onClose, addLog }: Props) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    const ctrl = new AbortController();
-    fetch('/api/setup/info', { signal: ctrl.signal })
-      .then((r) => r.json())
-      .then((infoRes) => {
-        if (infoRes.success) setInfo(infoRes.data);
+    let active = true;
+    Promise.all([
+      apiV1.getIngest(),
+      apiV1.getGlobalStreamKey().catch(() => null),
+    ])
+      .then(([ingest, credentials]) => {
+        if (!active) return;
+        const origin = window.location.origin;
+        const rtmpUrl = ingest.serverUrl.replace(/\/live\/?$/, '');
+        setInfo({
+          rtmpUrl,
+          rtmpsUrl: rtmpUrl.replace(/^rtmp:/, 'rtmps:'),
+          srtUrl: credentials?.srtUrl ?? null,
+          hlsUrl: `${origin}/stream.m3u8`,
+          flvUrl: `${origin}/stream.flv`,
+          dashboardUrl: origin,
+          apiUrl: `${origin}/api/v1`,
+          metricsUrl: `${origin}/metrics`,
+          streamKeyMasked: maskKey(credentials?.streamKey),
+        });
       })
       .catch(() => addLog(t('log.settingsLoadFailed'), 'error'))
       .finally(() => setLoading(false));
-    return () => ctrl.abort();
+    return () => {
+      active = false;
+    };
   }, [addLog]);
 
   useEffect(() => {
@@ -41,12 +76,9 @@ export function SettingsPanel({ onClose, addLog }: Props) {
       return;
     }
     try {
-      const res = await fetch('/api/setup/key');
-      const data = await res.json();
-      if (data.success) {
-        setStreamKey(data.data);
-        setShowKey(true);
-      }
+      const data = await apiV1.getGlobalStreamKey();
+      setStreamKey(data.streamKey);
+      setShowKey(true);
     } catch {
       addLog(t('log.keyRevealFailed'), 'error');
     }
@@ -56,17 +88,12 @@ export function SettingsPanel({ onClose, addLog }: Props) {
     if (!confirm(t('settings.confirmReset'))) return;
     setResetting(true);
     try {
-      const res = await fetch('/api/setup/key', { method: 'POST' });
-      const data = await res.json();
-      if (data.success) {
-        setStreamKey(data.data);
-        setShowKey(true);
-        addLog(t('log.keyResetSuccess'));
-      } else {
-        addLog(t('log.keyResetFailed', { error: data.error }), 'error');
-      }
-    } catch {
-      addLog(t('log.keyResetError'), 'error');
+      const data = await apiV1.resetGlobalStreamKey();
+      setStreamKey(data.streamKey);
+      setShowKey(true);
+      addLog(t('log.keyResetSuccess'));
+    } catch (error) {
+      addLog(t('log.keyResetFailed', { error: error instanceof Error ? error.message : String(error) }), 'error');
     } finally {
       setResetting(false);
     }
@@ -99,15 +126,15 @@ export function SettingsPanel({ onClose, addLog }: Props) {
   }
 
   const endpoints = info
-    ? [
-        { label: t('settings.endpoint.rtmp'), value: info.rtmp_url, note: t('settings.endpoint.rtmpNote') },
-        { label: t('settings.endpoint.rtmps'), value: info.rtmps_url, note: t('settings.endpoint.rtmpsNote') },
-        { label: t('settings.endpoint.srt'), value: info.srt_url, note: t('settings.endpoint.srtNote') },
-        { label: t('settings.endpoint.hls'), value: info.hls_url, note: t('settings.endpoint.hlsNote') },
-        { label: t('settings.endpoint.flv'), value: info.flv_url, note: t('settings.endpoint.flvNote') },
-        { label: t('settings.endpoint.dashboard'), value: info.dashboard_url, note: t('settings.endpoint.dashboardNote') },
-        { label: t('settings.endpoint.api'), value: info.api_url, note: t('settings.endpoint.apiNote') },
-        { label: t('settings.endpoint.metrics'), value: info.metrics_url, note: t('settings.endpoint.metricsNote') },
+      ? [
+        { label: t('settings.endpoint.rtmp'), value: info.rtmpUrl, note: t('settings.endpoint.rtmpNote') },
+        { label: t('settings.endpoint.rtmps'), value: info.rtmpsUrl, note: t('settings.endpoint.rtmpsNote') },
+        { label: t('settings.endpoint.srt'), value: info.srtUrl, note: t('settings.endpoint.srtNote') },
+        { label: t('settings.endpoint.hls'), value: info.hlsUrl, note: t('settings.endpoint.hlsNote') },
+        { label: t('settings.endpoint.flv'), value: info.flvUrl, note: t('settings.endpoint.flvNote') },
+        { label: t('settings.endpoint.dashboard'), value: info.dashboardUrl, note: t('settings.endpoint.dashboardNote') },
+        { label: t('settings.endpoint.api'), value: info.apiUrl, note: t('settings.endpoint.apiNote') },
+        { label: t('settings.endpoint.metrics'), value: info.metricsUrl, note: t('settings.endpoint.metricsNote') },
       ]
     : [];
 
@@ -135,7 +162,7 @@ export function SettingsPanel({ onClose, addLog }: Props) {
             <div class="bg-surface-raised rounded-xl p-4 border border-border">
               <div class="flex items-center gap-3 mb-3">
                 <div class="flex-1 font-mono text-sm bg-surface rounded-lg px-4 py-2.5 border border-border text-fg">
-                  {showKey && streamKey ? streamKey : info?.stream_key_masked ?? '****'}
+                  {showKey && streamKey ? streamKey : info?.streamKeyMasked ?? '****'}
                 </div>
                 <button
                   onClick={handleRevealKey}
@@ -145,7 +172,7 @@ export function SettingsPanel({ onClose, addLog }: Props) {
                 </button>
                 <button
                   onClick={() => {
-                    const key = streamKey ?? info?.stream_key_masked ?? '';
+                    const key = streamKey ?? info?.streamKeyMasked ?? '';
                     copyToClipboard(key, 'key');
                   }}
                   class="px-3 py-2.5 text-xs rounded-lg bg-surface-hover hover:bg-surface-active border border-border transition-colors text-fg-secondary whitespace-nowrap"
@@ -212,13 +239,13 @@ export function SettingsPanel({ onClose, addLog }: Props) {
               <div class="flex items-start gap-3">
                 <span class="shrink-0 w-6 h-6 rounded-full bg-accent text-white text-xs flex items-center justify-center font-bold">3</span>
                 <div class="text-sm text-fg">
-                  {t('settings.obsStep3')}<code class="text-accent bg-surface px-1.5 py-0.5 rounded text-xs">{info?.rtmp_url ?? 'rtmp://localhost:1935'}</code>
+                  {t('settings.obsStep3')}<code class="text-accent bg-surface px-1.5 py-0.5 rounded text-xs">{info?.rtmpUrl ?? 'rtmp://localhost:1935'}</code>
                 </div>
               </div>
               <div class="flex items-start gap-3">
                 <span class="shrink-0 w-6 h-6 rounded-full bg-accent text-white text-xs flex items-center justify-center font-bold">4</span>
                 <div class="text-sm text-fg">
-                  {t('settings.obsStep4')}<code class="text-accent bg-surface px-1.5 py-0.5 rounded text-xs">{showKey && streamKey ? streamKey : info?.stream_key_masked ?? '****'}</code>
+                  {t('settings.obsStep4')}<code class="text-accent bg-surface px-1.5 py-0.5 rounded text-xs">{showKey && streamKey ? streamKey : info?.streamKeyMasked ?? '****'}</code>
                 </div>
               </div>
             </div>

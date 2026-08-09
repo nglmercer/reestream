@@ -63,7 +63,7 @@ export function StreamsTable({ streams, loading, onRefresh }: Props) {
                   <tr key={s.id} class="hover:bg-surface-hover transition-colors">
                     <td class="px-5 py-3 font-mono text-xs text-fg-muted">{s.id.slice(0, 8)}…</td>
                     <td class="px-5 py-3 text-fg">{s.name}</td>
-                    <td class="px-5 py-3 font-mono text-xs text-fg-muted">{s.input_url}</td>
+                    <td class="px-5 py-3 font-mono text-xs text-fg-muted">{s.inputUrl}</td>
                     <td class="px-5 py-3">
                       <span class={`inline-block px-2 py-0.5 rounded text-xs font-semibold ${badge.cls}`}>
                         {badge.label}

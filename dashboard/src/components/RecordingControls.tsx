@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
-import { api } from '../api';
-import type { Recording } from '../api';
+import { apiV1 } from '../api';
+import type { ManualRecording } from '../api';
 import { useLocale } from '../hooks/useLocale';
 
 interface Props {
@@ -9,14 +9,13 @@ interface Props {
 
 export function RecordingControls({ addLog }: Props) {
   const { t } = useLocale();
-  const [recordings, setRecordings] = useState<Recording[]>([]);
+  const [recordings, setRecordings] = useState<ManualRecording[]>([]);
   const [loading, setLoading] = useState(true);
   const [recording, setRecording] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
-      const res = await api.getRecordings();
-      if (res.success && res.data) setRecordings(res.data);
+      setRecordings(await apiV1.getManualRecordings());
     } catch {
       // ignore
     } finally {
@@ -33,13 +32,9 @@ export function RecordingControls({ addLog }: Props) {
   const handleStart = useCallback(async () => {
     setRecording(true);
     try {
-      const res = await api.startRecording('live', 'rtmp://0.0.0.0:1935/live');
-      if (res.success) {
-        addLog(t('log.recordingStarted', { id: res.data ?? 'unknown' }));
-        refresh();
-      } else {
-        addLog(t('log.recordingFailed', { error: res.error ?? 'unknown' }), 'error');
-      }
+      const result = await apiV1.startManualRecording('live', 'rtmp://localhost:1935/live');
+      addLog(t('log.recordingStarted', { id: result.id }));
+      refresh();
     } catch (e) {
       addLog(t('log.recordingError', { error: String(e) }), 'error');
     } finally {
@@ -49,12 +44,12 @@ export function RecordingControls({ addLog }: Props) {
 
   const handleStop = useCallback(
     async (id: string) => {
-      const res = await api.stopRecording(id);
-      if (res.success) {
+      try {
+        await apiV1.stopManualRecording(id);
         addLog(t('log.recordingStopped'));
         refresh();
-      } else {
-        addLog(t('log.stopFailed', { error: res.error ?? 'unknown' }), 'error');
+      } catch (error) {
+        addLog(t('log.stopFailed', { error: error instanceof Error ? error.message : String(error) }), 'error');
       }
     },
     [addLog, refresh],
@@ -63,12 +58,12 @@ export function RecordingControls({ addLog }: Props) {
   const handleDelete = useCallback(
     async (id: string) => {
       if (!confirm(t('recording.confirmDelete'))) return;
-      const res = await api.deleteRecording(id);
-      if (res.success) {
+      try {
+        await apiV1.deleteManualRecording(id);
         addLog(t('log.recordingDeleted'));
         refresh();
-      } else {
-        addLog(t('log.deleteFailed', { error: res.error ?? 'unknown' }), 'error');
+      } catch (error) {
+        addLog(t('log.deleteFailed', { error: error instanceof Error ? error.message : String(error) }), 'error');
       }
     },
     [addLog, refresh],
@@ -128,7 +123,7 @@ export function RecordingControls({ addLog }: Props) {
                   <div>
                     <div class="text-sm text-fg">{r.filename}</div>
                     <div class="text-xs text-fg-faint">
-                      {formatDuration(r.started_at)} · {r.format.toUpperCase()}
+                      {formatDuration(r.startedAt)} · {r.format.toUpperCase()}
                     </div>
                   </div>
                 </div>
@@ -155,7 +150,7 @@ export function RecordingControls({ addLog }: Props) {
                   <div>
                     <div class="text-sm text-fg-secondary">{r.filename}</div>
                     <div class="text-xs text-fg-faint">
-                      {r.status} · {r.format.toUpperCase()} · {formatSize(r.size_bytes)}
+                      {r.status} · {r.format.toUpperCase()} · {formatSize(r.sizeBytes)}
                     </div>
                   </div>
                   <button

@@ -1,26 +1,25 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
-import type { StreamInfo } from '../api';
+import { apiV1 } from '../api';
+import type { Event } from '../api';
 
-interface StreamEvent {
+interface StreamingFrame {
   type: 'init' | 'event';
-  streams?: StreamInfo[];
-  event?: {
-    Started?: { id: string; name: string; input_url: string };
-    Stopped?: { id: string };
-    Updated?: { id: string; viewers: number; bitrate: number };
-    Error?: { id: string; message: string };
+  events?: Event[];
+  notification?: {
+    event: string;
+    eventId: string;
+    payload: Event;
+    timestamp: number;
   };
 }
 
 interface UseStreamWsOptions {
-  onInit?: (streams: StreamInfo[]) => void;
-  onStarted?: (id: string, name: string, input_url: string) => void;
-  onStopped?: (id: string) => void;
-  onUpdated?: (id: string, viewers: number, bitrate: number) => void;
-  onError?: (id: string, message: string) => void;
+  onInit?: (events: Event[]) => void;
+  onEvent?: (event: Event, eventName: string) => void;
   reconnectMs?: number;
 }
 
+/** Subscribe to the versioned event stream and reconcile live events in the UI. */
 export function useStreamWs(opts: UseStreamWsOptions) {
   const [connected, setConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
@@ -34,52 +33,38 @@ export function useStreamWs(opts: UseStreamWsOptions) {
     function connect() {
       if (destroyed) return;
 
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(`${proto}//${window.location.host}/ws/streams`);
+      const ws = apiV1.openStreamingSocket();
       wsRef.current = ws;
 
       ws.onopen = () => {
         if (!destroyed) setConnected(true);
       };
 
-      ws.onmessage = (ev) => {
+      ws.onmessage = (message) => {
         try {
-          const data: StreamEvent = JSON.parse(ev.data);
-          const o = optsRef.current;
-
-          if (data.type === 'init' && data.streams && o.onInit) {
-            o.onInit(data.streams);
-          } else if (data.type === 'event' && data.event) {
-            const e = data.event;
-            if (e.Started && o.onStarted) {
-              o.onStarted(e.Started.id, e.Started.name, e.Started.input_url);
-            }
-            if (e.Stopped && o.onStopped) {
-              o.onStopped(e.Stopped.id);
-            }
-            if (e.Updated && o.onUpdated) {
-              o.onUpdated(e.Updated.id, e.Updated.viewers, e.Updated.bitrate);
-            }
-            if (e.Error && o.onError) {
-              o.onError(e.Error.id, e.Error.message);
-            }
+          const frame = JSON.parse(message.data) as StreamingFrame;
+          const current = optsRef.current;
+          if (frame.type === 'init' && frame.events) {
+            current.onInit?.(frame.events);
+          } else if (frame.type === 'event' && frame.notification?.payload) {
+            current.onEvent?.(frame.notification.payload, frame.notification.event);
           }
         } catch {
-          // ignore parse errors
+          // Ignore malformed or provider-specific frames and keep the socket alive.
         }
       };
 
       ws.onclose = () => {
         if (!destroyed) {
           setConnected(false);
-          const delay = optsRef.current.reconnectMs ?? 3000;
-          reconnectRef.current = setTimeout(connect, delay);
+          reconnectRef.current = setTimeout(
+            connect,
+            optsRef.current.reconnectMs ?? 3_000,
+          );
         }
       };
 
-      ws.onerror = () => {
-        ws.close();
-      };
+      ws.onerror = () => ws.close();
     }
 
     connect();
@@ -87,7 +72,7 @@ export function useStreamWs(opts: UseStreamWsOptions) {
     return () => {
       destroyed = true;
       if (reconnectRef.current) clearTimeout(reconnectRef.current);
-      if (wsRef.current) wsRef.current.close();
+      wsRef.current?.close();
     };
   }, []);
 

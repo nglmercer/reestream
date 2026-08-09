@@ -1,9 +1,9 @@
-import type { ServerStatus } from '../api';
+import type { DashboardStatus } from '../api';
 import { useLocale } from '../hooks/useLocale';
 import type { TranslationKey } from '../i18n';
 
 interface Props {
-  status: ServerStatus | null;
+  status: DashboardStatus | null;
   loading: boolean;
 }
 
@@ -32,9 +32,9 @@ export function StatsCards({ status, loading }: Props) {
   }
 
   const cards = [
-    { label: t('stats.uptime'), value: status ? formatUptime(status.uptime_seconds, t) : t('stats.fallback') },
-    { label: t('stats.activeStreams'), value: status ? String(status.active_streams) : '0' },
-    { label: t('stats.totalViewers'), value: status ? String(status.total_viewers) : '0' },
+    { label: t('stats.uptime'), value: status ? formatUptime(status.uptimeSeconds, t) : t('stats.fallback') },
+    { label: t('stats.activeStreams'), value: status ? String(status.activeStreams) : '0' },
+    { label: t('stats.totalViewers'), value: status ? String(status.totalViewers) : '0' },
     {
       label: t('stats.status'),
       value: status ? t('stats.online') : t('stats.fallback'),

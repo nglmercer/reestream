@@ -1,6 +1,12 @@
 import { useCallback, useState, useEffect } from 'preact/hooks';
-import { api } from './api';
-import type { ServerStatus, StreamInfo, Platform } from './api';
+import { apiV1 } from './api';
+import type {
+  Channel as V1Channel,
+  DashboardStatus,
+  Event,
+  PlatformCatalogEntry,
+  StreamInfo,
+} from './api';
 import { usePolling, useStreamWs } from './hooks';
 import { useLocale } from './hooks/useLocale';
 import { useLogger } from './components/LogViewer';
@@ -8,7 +14,7 @@ import { Header } from './components/Header';
 import { StatsCards } from './components/StatsCards';
 import { VideoPreview } from './components/VideoPreview';
 import { StreamsTable } from './components/StreamsTable';
-import { PlatformsTable } from './components/PlatformsTable';
+import { PlatformsTable, type DashboardChannel, type ChannelUpdate } from './components/PlatformsTable';
 import { LogViewer } from './components/LogViewer';
 import { SetupWizard } from './components/SetupWizard';
 import { SettingsPanel } from './components/SettingsPanel';
@@ -17,79 +23,84 @@ import { RecordingControls } from './components/RecordingControls';
 const STATUS_POLL = 5_000;
 const PLATFORMS_POLL = 15_000;
 
+function eventToStream(event: Event): StreamInfo {
+  return {
+    id: event.id,
+    name: event.title || event.id,
+    inputUrl: event.ingest.serverUrl,
+    status: event.status === 'live' ? 'Live' : 'Idle',
+    startedAt: event.startedAt,
+    viewers: event.currentViewers,
+    bitrate: 0,
+  };
+}
+
+function toDashboardChannel(
+  channel: V1Channel,
+  catalog: PlatformCatalogEntry[],
+): DashboardChannel {
+  return {
+    ...channel,
+    platformName: catalog.find((platform) => platform.id === channel.platformId)?.name
+      ?? channel.platformId,
+    keyConfigured: true,
+  };
+}
+
 export function App() {
   const { logs, addLog, clearLogs } = useLogger();
   const { t } = useLocale();
   const [needsSetup, setNeedsSetup] = useState<boolean | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [liveStreams, setLiveStreams] = useState<StreamInfo[]>([]);
-  const [wsConnected, setWsConnected] = useState(false);
+  const [platformCatalog, setPlatformCatalog] = useState<PlatformCatalogEntry[]>([]);
 
   useEffect(() => {
-    const ctrl = new AbortController();
-    fetch('/api/setup/status', { signal: ctrl.signal })
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.success) setNeedsSetup(d.data.first_run);
-        else setNeedsSetup(false);
+    let active = true;
+    apiV1
+      .getSetupStatus()
+      .then((status) => {
+        if (active) setNeedsSetup(status.firstRun);
       })
       .catch(() => setNeedsSetup(false));
-    return () => ctrl.abort();
+    return () => {
+      active = false;
+    };
   }, []);
 
-  useStreamWs({
-    onInit: (streams) => {
-      setLiveStreams(streams as StreamInfo[]);
-      setWsConnected(true);
+  const { connected: wsConnected } = useStreamWs({
+    onInit: (events) => {
+      setLiveStreams(events.filter((event) => event.status === 'live').map(eventToStream));
     },
-    onStarted: (id, name, input_url) => {
-      addLog(t('log.streamStarted', { name }));
+    onEvent: (event, eventName) => {
+      if (eventName === 'event.started') {
+        addLog(t('log.streamStarted', { name: event.title || event.id }));
+      } else if (eventName === 'event.ended' || eventName === 'event.cancelled') {
+        addLog(t('log.streamEnded'));
+      }
       setLiveStreams((prev) => {
-        if (prev.some((s) => s.id === id)) return prev;
-        return [...prev, {
-          id,
-          name,
-          input_url,
-          status: 'Live',
-          started_at: Math.floor(Date.now() / 1000),
-          viewers: 0,
-          bitrate: 0,
-        }];
+        const next = prev.filter((stream) => stream.id !== event.id);
+        return event.status === 'live' ? [...next, eventToStream(event)] : next;
       });
-    },
-    onStopped: (id) => {
-      addLog(t('log.streamEnded'));
-      setLiveStreams((prev) => prev.filter((s) => s.id !== id));
-    },
-    onUpdated: (id, viewers, bitrate) => {
-      setLiveStreams((prev) =>
-        prev.map((s) => (s.id === id ? { ...s, viewers, bitrate } : s)),
-      );
-    },
-    onError: (id, message) => {
-      addLog(t('log.streamError', { message }), 'error');
-      setLiveStreams((prev) =>
-        prev.map((s) => (s.id === id ? { ...s, status: { Error: message } } : s)),
-      );
     },
   });
 
   const fetchStreams = useCallback(async (): Promise<StreamInfo[]> => {
-    const res = await api.getStreams();
-    if (!res.success || !res.data) throw new Error(res.error ?? t('error.fetchStreams'));
-    return res.data;
+    const events = await apiV1.getEvents('live');
+    return events.map(eventToStream);
   }, []);
 
-  const fetchStatus = useCallback(async (): Promise<ServerStatus> => {
-    const res = await api.getStatus();
-    if (!res.success || !res.data) throw new Error(res.error ?? t('error.fetchStatus'));
-    return res.data;
+  const fetchStatus = useCallback(async (): Promise<DashboardStatus> => {
+    return apiV1.getStatus();
   }, []);
 
-  const fetchPlatforms = useCallback(async (): Promise<Platform[]> => {
-    const res = await api.getPlatforms();
-    if (!res.success || !res.data) throw new Error(res.error ?? t('error.fetchPlatforms'));
-    return res.data;
+  const fetchPlatforms = useCallback(async (): Promise<DashboardChannel[]> => {
+    const [channels, catalog] = await Promise.all([
+      apiV1.getChannels(),
+      apiV1.getPlatforms(),
+    ]);
+    setPlatformCatalog(catalog);
+    return channels.map((channel) => toDashboardChannel(channel, catalog));
   }, []);
 
   const status = usePolling(fetchStatus, STATUS_POLL);
@@ -99,13 +110,13 @@ export function App() {
   const streams = wsConnected ? { data: liveStreams, loading: false, refresh: streamsPoll.refresh } : streamsPoll;
 
   const handleToggle = useCallback(
-    async (id: string) => {
-      const res = await api.togglePlatform(id);
-      if (res.success) {
+    async (id: string, enabled: boolean) => {
+      try {
+        await apiV1.updateChannel(id, { enabled });
         addLog(t('log.platformToggled'));
         platforms.refresh();
-      } else {
-        addLog(t('log.toggleFailed', { error: res.error ?? 'unknown' }), 'error');
+      } catch (error) {
+        addLog(t('log.toggleFailed', { error: error instanceof Error ? error.message : String(error) }), 'error');
       }
     },
     [addLog, platforms],
@@ -113,38 +124,47 @@ export function App() {
 
   const handleAddPlatform = useCallback(
     async (name: string, url: string, key: string) => {
-      const res = await api.addPlatform({ name, url, key });
-      if (res.success) {
+      const catalogEntry = platformCatalog.find((platform) =>
+        platform.name.toLowerCase() === name.toLowerCase()
+        || platform.slug.toLowerCase() === name.toLowerCase(),
+      );
+      try {
+        await apiV1.createChannel({
+          platformId: catalogEntry?.id ?? 'custom-rtmp',
+          displayName: name,
+          streamUrl: url,
+          streamKey: key,
+        });
         addLog(t('log.platformAdded', { name }));
         platforms.refresh();
-      } else {
-        throw new Error(res.error ?? t('log.addFailed'));
+      } catch (error) {
+        throw new Error(error instanceof Error ? error.message : t('log.addFailed'));
       }
     },
-    [addLog, platforms],
+    [addLog, platformCatalog, platforms],
   );
 
   const handleRemovePlatform = useCallback(
     async (id: string) => {
-      const res = await api.removePlatform(id);
-      if (res.success) {
+      try {
+        await apiV1.deleteChannel(id);
         addLog(t('log.platformRemoved'));
         platforms.refresh();
-      } else {
-        addLog(t('log.removeFailed', { error: res.error ?? 'unknown' }), 'error');
+      } catch (error) {
+        addLog(t('log.removeFailed', { error: error instanceof Error ? error.message : String(error) }), 'error');
       }
     },
     [addLog, platforms],
   );
 
   const handleUpdatePlatform = useCallback(
-    async (id: string, req: { name?: string; url?: string; key?: string; enabled?: boolean }) => {
-      const res = await api.updatePlatform(id, req);
-      if (res.success) {
+    async (id: string, req: ChannelUpdate) => {
+      try {
+        await apiV1.updateChannel(id, req);
         addLog(t('log.platformUpdated'));
         platforms.refresh();
-      } else {
-        addLog(t('log.updateFailed', { error: res.error ?? 'unknown' }), 'error');
+      } catch (error) {
+        addLog(t('log.updateFailed', { error: error instanceof Error ? error.message : String(error) }), 'error');
       }
     },
     [addLog, platforms],

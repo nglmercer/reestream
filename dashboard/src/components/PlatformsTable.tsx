@@ -1,15 +1,27 @@
 import { useState, useCallback } from 'preact/hooks';
-import type { Platform, UpdatePlatformRequest } from '../api';
+import type { Channel } from '../api';
 import { useLocale } from '../hooks/useLocale';
 
+export interface DashboardChannel extends Channel {
+  platformName: string;
+  keyConfigured: boolean;
+}
+
+export type ChannelUpdate = {
+  displayName?: string;
+  streamUrl?: string;
+  streamKey?: string;
+  enabled?: boolean;
+};
+
 interface Props {
-  platforms: Platform[];
+  platforms: DashboardChannel[];
   loading: boolean;
   onRefresh: () => void;
-  onToggle: (id: string) => void;
+  onToggle: (id: string, enabled: boolean) => void;
   onAdd: (name: string, url: string, key: string) => Promise<void>;
   onRemove: (id: string) => Promise<void>;
-  onUpdate: (id: string, req: UpdatePlatformRequest) => Promise<void>;
+  onUpdate: (id: string, req: ChannelUpdate) => Promise<void>;
 }
 
 const PRESETS: Array<{ name: string; url: string }> = [
@@ -69,11 +81,11 @@ export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd,
     [onRemove],
   );
 
-  const startEdit = useCallback((p: Platform) => {
+  const startEdit = useCallback((p: DashboardChannel) => {
     setEditingId(p.id);
-    setEditName(p.name);
-    setEditUrl(p.url);
-    setEditKey(p.key);
+    setEditName(p.displayName);
+    setEditUrl(p.streamUrl);
+    setEditKey('');
     setEditEnabled(p.enabled);
   }, []);
 
@@ -89,9 +101,9 @@ export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd,
     setSaving(true);
     try {
       await onUpdate(editingId, {
-        name: editName,
-        url: editUrl,
-        key: editKey,
+        displayName: editName,
+        streamUrl: editUrl,
+        ...(editKey ? { streamKey: editKey } : {}),
         enabled: editEnabled,
       });
       cancelEdit();
@@ -251,12 +263,14 @@ export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd,
                 ) : (
                   <tr key={p.id} class="hover:bg-surface-hover transition-colors">
                     <td class="px-5 py-3 font-mono text-xs text-fg-muted">{p.id.slice(0, 8)}…</td>
-                    <td class="px-5 py-3 text-fg">{p.name}</td>
-                    <td class="px-5 py-3 font-mono text-xs text-fg-muted">{p.url}</td>
-                    <td class="px-5 py-3 font-mono text-xs text-fg-faint">{'•'.repeat(Math.min(p.key.length, 8))}</td>
+                    <td class="px-5 py-3 text-fg">{p.displayName}</td>
+                    <td class="px-5 py-3 font-mono text-xs text-fg-muted">{p.streamUrl}</td>
+                    <td class="px-5 py-3 font-mono text-xs text-fg-faint">
+                      {p.keyConfigured ? '••••••••' : '—'}
+                    </td>
                     <td class="px-5 py-3">
                       <button
-                        onClick={() => onToggle(p.id)}
+                        onClick={() => onToggle(p.id, !p.enabled)}
                         class={`inline-block px-2 py-0.5 rounded text-xs font-semibold cursor-pointer transition-colors ${
                           p.enabled
                             ? 'bg-success-bg text-success hover:opacity-80'
@@ -275,7 +289,7 @@ export function PlatformsTable({ platforms, loading, onRefresh, onToggle, onAdd,
                           {t('platforms.edit')}
                         </button>
                         <button
-                          onClick={() => handleRemove(p.id, p.name)}
+                          onClick={() => handleRemove(p.id, p.displayName)}
                           disabled={removing === p.id}
                           class="px-3 py-1 text-xs rounded border text-danger hover:bg-danger-bg disabled:opacity-50 transition-colors"
                           style={{ borderColor: 'var(--danger)' }}

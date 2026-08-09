@@ -1,8 +1,9 @@
 # Reestream client API
 
-This is the contract for a future web client. The versioned product API is
-available under `/api/v1`. The older `/api/*` routes remain available for the
-current dashboard, but new UI code should use the versioned routes.
+This is the contract for the web dashboard. The versioned product API is
+available under `/api/v1`. The older `/api/*` routes remain available as a
+backward-compatible server interface; the dashboard uses only the versioned
+routes.
 
 The API is designed around the same product areas a multistream application
 needs: destinations (channels), reusable stream drafts, scheduled events,
@@ -425,10 +426,11 @@ When `secret` is configured, verify the `X-Reestream-Signature` header as
 
 ## Legacy compatibility routes
 
-The current dashboard continues to use `/api/status`, `/api/streams`,
-`/api/platforms`, `/api/recordings`, `/api/config`, `/ws/streams`, and the
-media routes `/stream.m3u8`, `/hls/{filename}`, and `/stream.flv`. Do not
-remove these until the future client has migrated to `/api/v1`.
+The server still exposes the older `/api/*` and `/ws/streams` routes for
+external clients. The dashboard no longer depends on them. The media routes
+`/stream.m3u8`, `/hls/{filename}`, and `/stream.flv` remain active because the
+preview player consumes the media stream directly rather than through the
+JSON API.
 
 ## Client implementation guidance
 

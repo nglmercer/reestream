@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from 'preact/hooks';
-import type { Orientation, SetupStatus } from '../api';
+import { apiV1 } from '../api';
+import type { Orientation, V1SetupStatus } from '../api';
 import { useLocale } from '../hooks/useLocale';
 
 interface SetupPlatform {
@@ -31,16 +32,18 @@ export function SetupWizard() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    const ctrl = new AbortController();
-    fetch('/api/setup/status', { signal: ctrl.signal })
-      .then((r: Response) => r.json())
-      .then((d: { success: boolean; data?: SetupStatus }) => {
-        if (d.success && d.data && !d.data.first_run) {
+    let active = true;
+    apiV1
+      .getSetupStatus()
+      .then((status: V1SetupStatus) => {
+        if (active && !status.firstRun) {
           window.location.href = '/';
         }
       })
       .catch(() => {});
-    return () => ctrl.abort();
+    return () => {
+      active = false;
+    };
   }, []);
 
   const addPlatform = useCallback((preset: (typeof PRESETS)[number]) => {
@@ -74,28 +77,19 @@ export function SetupWizard() {
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch('/api/setup/save', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          rtmp_port: parseInt(rtmpPort, 10),
-          stream_key: streamKey,
-          platforms: platforms.map((p) => ({
-            name: p.name,
-            url: p.url,
-            key: p.key,
-            orientation: p.orientation,
-          })),
-        }),
+      await apiV1.saveSetup({
+        rtmpPort: parseInt(rtmpPort, 10),
+        streamKey,
+        platforms: platforms.filter((p) => p.url.trim() && p.key.trim()).map((p) => ({
+          name: p.name,
+          url: p.url,
+          key: p.key,
+          orientation: p.orientation,
+        })),
       });
-      const data = await res.json();
-      if (data.success) {
-        setStep('done');
-      } else {
-        setError(data.error ?? t('setup.failed'));
-      }
+      setStep('done');
     } catch (e) {
-      setError(t('setup.networkError', { error: String(e) }));
+      setError(t('setup.networkError', { error: e instanceof Error ? e.message : String(e) }));
     } finally {
       setSaving(false);
     }

@@ -1,0 +1,29 @@
+{
+  "channels": [],
+  "channel_secrets": {},
+  "drafts": [],
+  "events": [],
+  "event_stream_keys": {},
+  "files": [],
+  "transcriptions": [],
+  "oauth_connections": [],
+  "chat": [],
+  "viewer_samples": [],
+  "clips": [],
+  "studio_sessions": [],
+  "brands": [],
+  "captions": [],
+  "qr_codes": [],
+  "tickers": [],
+  "webhooks": [],
+  "profile": {
+    "id": "local-user",
+    "username": "local-user",
+    "email": "admin@localhost",
+    "displayName": "Reestream user",
+    "timezone": "UTC",
+    "avatarUrl": null,
+    "createdAt": 1786237893
+  },
+  "sessions": []
+}

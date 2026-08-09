@@ -1,20 +1,3 @@
-export { api } from './client';
-export type {
-  ApiResponse,
-  ServerStatus,
-  StreamInfo,
-  StreamStatus,
-  Platform,
-  AddStreamRequest,
-  AddPlatformRequest,
-  UpdatePlatformRequest,
-  ConfigResponse,
-  Orientation,
-  Recording,
-  ServerInfo,
-  SetupStatus,
-} from './types';
-export { isStreamStatusError, streamStatusLabel } from './types';
 export {
   ReestreamApiError,
   ReestreamApiV1,
@@ -24,6 +7,7 @@ export type {
   AnalyticsReport,
   AuthTokens,
   ConnectionSummary,
+  Channel,
   Channel as V1Channel,
   ChannelCredentials,
   ChatMessage,
@@ -39,6 +23,12 @@ export type {
   StudioSession,
   Transcription,
   ViewerAnalytics,
+  DashboardStatus,
+  ManualRecording,
+  Orientation,
+  StreamInfo,
+  StreamStatus,
+  SetupStatus as V1SetupStatus,
   V1Envelope,
   V1Error,
 } from './v1';

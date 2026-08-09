@@ -1,9 +1,4 @@
-/** Typed client for the versioned Reestream product API.
- *
- * The legacy client in `client.ts` remains for the current dashboard. New
- * screens should depend on this client so API versioning and auth behavior
- * stay in one place.
- */
+/** Typed client for the versioned Reestream product API. */
 
 export interface V1Error {
   code: string;
@@ -16,6 +11,45 @@ export interface V1Envelope<T> {
   error?: V1Error;
   meta?: { page: number; limit: number; total: number };
 }
+
+export interface DashboardStatus {
+  version: string;
+  uptimeSeconds: number;
+  activeStreams: number;
+  totalViewers: number;
+}
+
+export interface SetupStatus {
+  firstRun: boolean;
+  configExists: boolean;
+  hasStreamKey: boolean;
+  platformCount: number;
+}
+
+export interface ManualRecording {
+  id: string;
+  streamId: string;
+  filename: string;
+  format: string;
+  startedAt: number;
+  sizeBytes: number;
+  status: 'recording' | 'completed' | 'failed' | string;
+}
+
+export type Orientation = 'horizontal' | 'vertical';
+
+/** View-model used by the dashboard stream table. */
+export interface StreamInfo {
+  id: string;
+  name: string;
+  inputUrl: string;
+  status: StreamStatus;
+  startedAt: number | null;
+  viewers: number;
+  bitrate: number;
+}
+
+export type StreamStatus = 'Idle' | 'Live' | { Error: string };
 
 export interface PlatformCatalogEntry {
   id: string;
@@ -294,6 +328,31 @@ export class ReestreamApiV1 {
     return payload.data;
   }
 
+  getStatus(): Promise<DashboardStatus> {
+    return this.request<DashboardStatus>('/status');
+  }
+
+  getSetupStatus(): Promise<SetupStatus> {
+    return this.request<SetupStatus>('/setup/status');
+  }
+
+  saveSetup(request: {
+    rtmpAddr?: string;
+    rtmpPort?: number;
+    streamKey: string;
+    platforms: Array<{
+      name: string;
+      url: string;
+      key: string;
+      orientation?: 'horizontal' | 'vertical';
+    }>;
+  }): Promise<{ rtmpAddr: string; rtmpPort: number; platformCount: number }> {
+    return this.request('/setup', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+  }
+
   login(email: string, password: string): Promise<AuthTokens> {
     return this.request<AuthTokens>('/auth/login', {
       method: 'POST',
@@ -318,6 +377,10 @@ export class ReestreamApiV1 {
 
   getGlobalStreamKey(): Promise<{ streamKey: string; srtUrl: string }> {
     return this.request('/stream-key');
+  }
+
+  resetGlobalStreamKey(): Promise<{ streamKey: string; srtUrl: string }> {
+    return this.request('/stream-key/reset', { method: 'POST' });
   }
 
   getChatUrl(): Promise<{ webchatUrl: string }> {
@@ -382,6 +445,26 @@ export class ReestreamApiV1 {
     });
   }
 
+  updateChannel(
+    id: string,
+    request: {
+      displayName?: string;
+      channelUrl?: string;
+      streamUrl?: string;
+      streamKey?: string;
+      enabled?: boolean;
+    },
+  ): Promise<Channel> {
+    return this.request<Channel>(`/channels/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(request),
+    });
+  }
+
+  deleteChannel(id: string): Promise<{ deleted: boolean; id: string }> {
+    return this.request(`/channels/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
   getChannelCredentials(id: string): Promise<ChannelCredentials> {
     return this.request<ChannelCredentials>(`/channels/${id}/credentials`);
   }
@@ -444,6 +527,25 @@ export class ReestreamApiV1 {
 
   endEvent(id: string): Promise<Event> {
     return this.request<Event>(`/events/${id}/end`, { method: 'POST' });
+  }
+
+  getManualRecordings(): Promise<ManualRecording[]> {
+    return this.request<ManualRecording[]>('/recordings');
+  }
+
+  startManualRecording(streamId: string, inputUrl: string): Promise<{ id: string }> {
+    return this.request<{ id: string }>('/recordings', {
+      method: 'POST',
+      body: JSON.stringify({ streamId, inputUrl }),
+    });
+  }
+
+  stopManualRecording(id: string): Promise<{ id: string; status: string }> {
+    return this.request(`/recordings/${encodeURIComponent(id)}/stop`, { method: 'POST' });
+  }
+
+  deleteManualRecording(id: string): Promise<{ deleted: boolean; id: string }> {
+    return this.request(`/recordings/${encodeURIComponent(id)}`, { method: 'DELETE' });
   }
 
   getRecordings(eventId: string): Promise<EventRecordings> {
