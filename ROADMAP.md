@@ -8,7 +8,7 @@
 | Rust source files | 36 |
 | Rust lines of code | ~8,500 |
 | Tests | 320 |
-| API endpoints | 25 |
+| API endpoints | 90+ (legacy + `/api/v1`) |
 | Feature flags | 8 |
 | Dashboard components | 10 |
 
@@ -35,7 +35,13 @@
 - HTTP server using axum
 - HLS segmenter with live `.m3u8` playlist
 - HTTP-FLV live streaming (`/stream.flv`)
-- REST API (25 endpoints)
+- Legacy REST API plus versioned product API for channels, drafts, events,
+  Studio, chat, analytics, storage, clips, webhooks, private ingest, OAuth,
+  and provider-compatible event subresources
+- Scheduled event worker with file/playlist FFmpeg playback and recording-to-
+  storage lifecycle linkage
+- Optional command-backed transcription lifecycle with explicit unavailable
+  (`Unknown`) status when no speech-to-text binary is configured
 - Prometheus metrics (uptime, streams, viewers, bitrate)
 - Webhook notifications (stream start/end/error, viewer connect/disconnect)
 - DVR/timeshift buffer
@@ -101,6 +107,10 @@ cargo build --release --features all
 
 ## TODO: Future Features
 
+The current product API and local runtime cover the client-facing control plane.
+The remaining work below is optional production depth behind provider-specific
+adapters and external media services, not missing route design.
+
 ### 1. Web UI Enhancements
 - [ ] i18n (internationalization)
 - [ ] Stream analytics charts (bitrate/viewers over time)
@@ -117,7 +127,11 @@ cargo build --release --features all
 
 ---
 
-## API Endpoints (25)
+## API Endpoints
+
+The table below is the legacy compatibility surface. The complete versioned
+client contract is documented in [docs/API.md](docs/API.md); use `/api/v1` for
+new web work.
 
 | Method | Path | Description |
 |--------|------|-------------|

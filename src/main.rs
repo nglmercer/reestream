@@ -7,14 +7,62 @@ use tokio::sync::{RwLock, broadcast};
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
-use reestream::client::handle_publisher;
-use reestream::config::Config;
+use reestream::config::{Config, PlatformEvent, platform_id_from};
 
 type StreamManagerPair = (
     Option<Arc<dyn reestream::client::StreamRegistrar>>,
     Option<Arc<dyn reestream::client::DataPublisher>>,
     Option<tokio::sync::broadcast::Receiver<reestream::config::PlatformEvent>>,
 );
+
+async fn sync_product_platform(
+    platforms: &Arc<RwLock<Vec<reestream::config::Platform>>>,
+    event: &PlatformEvent,
+) {
+    let mut configured = platforms.write().await;
+    match event {
+        PlatformEvent::Added {
+            platform_id,
+            url,
+            key,
+        } => {
+            let exists = configured.iter().any(|platform| {
+                platform_id_from(&platform.url.to_string(), &platform.key) == *platform_id
+            });
+            if !exists {
+                if let Ok(url) = url::Url::parse(url) {
+                    configured.push(reestream::config::Platform {
+                        url,
+                        key: key.clone(),
+                        enabled: true,
+                        orientation: Default::default(),
+                    });
+                }
+            }
+        }
+        PlatformEvent::Removed { platform_id } => {
+            configured.retain(|platform| {
+                platform_id_from(&platform.url.to_string(), &platform.key) != *platform_id
+            });
+        }
+        PlatformEvent::Toggled {
+            platform_id,
+            url,
+            key,
+            enabled,
+        } => {
+            if let Some(platform) = configured.iter_mut().find(|platform| {
+                platform_id_from(&platform.url.to_string(), &platform.key) == *platform_id
+            }) {
+                platform.enabled = *enabled;
+                platform.key = key.clone();
+                if let Ok(url) = url::Url::parse(url) {
+                    platform.url = url;
+                }
+            }
+        }
+    }
+}
 
 #[derive(clap::Parser)]
 struct Args {
@@ -128,6 +176,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let connection_pool = Arc::new(reestream::hardening::ConnectionPool::new(1000));
     let rate_limiter = Arc::new(reestream::hardening::RateLimiter::new(100));
 
+    #[cfg(any(feature = "hls", feature = "api"))]
+    let restream_store = Arc::new(
+        reestream::http_server::restream::RestreamStore::with_state_path(
+            args.config.with_extension("state.json"),
+        ),
+    );
+    #[cfg(any(feature = "hls", feature = "api"))]
+    let publish_resolver: Option<Arc<dyn reestream::client::PublishKeyResolver>> =
+        Some(restream_store.clone() as Arc<dyn reestream::client::PublishKeyResolver>);
+    #[cfg(not(any(feature = "hls", feature = "api")))]
+    let publish_resolver: Option<Arc<dyn reestream::client::PublishKeyResolver>> = None;
+
     // Create StreamManager and DataBus shared between HTTP server and RTMP handler
     #[cfg(any(feature = "hls", feature = "api"))]
     let (stream_manager, data_bus, platform_event_rx): StreamManagerPair = {
@@ -140,12 +200,91 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .await;
             }
         }
+        // Restore API-managed destinations on startup and bridge future
+        // channel changes into the relay's existing PlatformEvent pipeline.
+        for channel in restream_store.list_channels().await {
+            sync_product_platform(
+                &platforms,
+                &PlatformEvent::Added {
+                    platform_id: reestream::config::platform_id_from(
+                        &channel.stream_url,
+                        &channel.stream_key,
+                    ),
+                    url: channel.stream_url.clone(),
+                    key: channel.stream_key.clone(),
+                },
+            )
+            .await;
+            let id = sm
+                .add_platform(
+                    channel.display_name.clone(),
+                    channel.stream_url.clone(),
+                    channel.stream_key.clone(),
+                )
+                .await;
+            if !channel.enabled {
+                sm.toggle_platform(&id, false).await;
+            }
+        }
+        let mut product_platform_events = restream_store.subscribe_platform_events();
+        let sm_for_product_events = sm.clone();
+        let core_platforms_for_product_events = platforms.clone();
+        tokio::spawn(async move {
+            loop {
+                match product_platform_events.recv().await {
+                    Ok(event) => {
+                        sync_product_platform(&core_platforms_for_product_events, &event).await;
+                        sm_for_product_events.apply_platform_event(event).await;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
         let hls_config = reestream::http_server::hls::HlsConfig::default();
         let recording_config = reestream::http_server::recording::RecordingConfig {
-            enabled: true,
-            output_dir: std::path::PathBuf::from("/tmp/reestream/recordings"),
+            enabled: std::env::var("RESTREAM_RECORDING_ENABLED")
+                .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
+                .unwrap_or(true),
+            output_dir: restream_store.storage_root_path().join("recordings"),
             ..Default::default()
         };
+        let recording_manager = Arc::new(reestream::http_server::recording::RecordingManager::new(
+            recording_config,
+        ));
+        let playback_manager =
+            Arc::new(reestream::http_server::playback::PlaybackManager::default());
+        let scheduler_store = restream_store.clone();
+        let scheduler_recording_manager = recording_manager.clone();
+        let scheduler_playback_manager = playback_manager.clone();
+        let scheduler_shutdown = shutdown.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                        _ = interval.tick() => {
+                            for event in scheduler_store.promote_due_events().await {
+                                let playback = reestream::http_server::api_v1::start_event_playback(
+                                    &scheduler_playback_manager,
+                                    &scheduler_store,
+                                    &event,
+                                ).await;
+                                if playback.is_ok() {
+                                    let _ = reestream::http_server::api_v1::start_event_recording(
+                                        &scheduler_recording_manager,
+                                        &scheduler_store,
+                                        &event,
+                                    ).await;
+                                } else {
+                                    let _ = scheduler_store.cancel_event(&event.id).await;
+                                }
+                            }
+                    }
+                    _ = scheduler_shutdown.wait_for_shutdown() => break,
+                }
+            }
+        });
         let data_bus = reestream::http_server::databus::DataBus::new();
         let flv_state = reestream::http_server::flv::FlvState::default();
 
@@ -254,11 +393,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             hls_segmenter: Arc::new(reestream::http_server::hls::HlsSegmenter::new(hls_config)),
             flv_state,
             data_bus,
-            recording_manager: Arc::new(reestream::http_server::recording::RecordingManager::new(
-                recording_config,
-            )),
+            recording_manager,
+            playback_manager,
             start_time: std::time::Instant::now(),
             config_path: args.config.clone(),
+            restream: restream_store,
         };
         tokio::spawn(async move {
             if let Err(e) =
@@ -324,8 +463,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let registrar: Option<Arc<dyn reestream::client::StreamRegistrar>> = stream_manager.clone().map(|sm| sm as Arc<dyn reestream::client::StreamRegistrar>);
                         let pubber = data_bus.clone();
                         let pev = platform_event_rx.as_ref().unwrap().resubscribe();
+                        let resolver = publish_resolver.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = handle_publisher(socket, platforms, stream_key, registrar, pubber, pev).await {
+                            if let Err(e) = reestream::client::handle_publisher_with_resolver(
+                                socket,
+                                platforms,
+                                stream_key,
+                                registrar,
+                                pubber,
+                                pev,
+                                resolver,
+                            )
+                            .await
+                            {
                                 error!("Error in connection from {}: {:#}", peer_addr, e);
                             } else {
                                 info!("Connection from {} ended correctly", peer_addr);

@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,6 +78,7 @@ pub enum RecordingStatus {
 pub struct RecordingManager {
     config: RecordingConfig,
     recordings: Arc<RwLock<Vec<RecordingInfo>>>,
+    processes: Arc<Mutex<HashMap<String, Arc<Mutex<tokio::process::Child>>>>>,
 }
 
 impl RecordingManager {
@@ -84,7 +86,16 @@ impl RecordingManager {
         Self {
             config,
             recordings: Arc::new(RwLock::new(Vec::new())),
+            processes: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.config.enabled
+    }
+
+    pub fn output_dir(&self) -> PathBuf {
+        self.config.output_dir.clone()
     }
 
     pub async fn start_recording(
@@ -121,52 +132,75 @@ impl RecordingManager {
             status: RecordingStatus::Recording,
         };
 
-        self.recordings.write().await.push(info);
-
         let ffmpeg_args = self.build_ffmpeg_args(input_url, &path);
+        let child = tokio::process::Command::new("ffmpeg")
+            .args(&ffmpeg_args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|e| format!("Failed to start recording: {e}"))?;
+        let child = Arc::new(Mutex::new(child));
+        self.recordings.write().await.push(info);
+        self.processes
+            .lock()
+            .await
+            .insert(id.clone(), child.clone());
+
         let recordings = self.recordings.clone();
+        let processes = self.processes.clone();
         let rec_id = id.clone();
         let input_owned = input_url.to_string();
         let path_owned = path.clone();
 
         tokio::spawn(async move {
-            match tokio::process::Command::new("ffmpeg")
-                .args(&ffmpeg_args)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-            {
-                Ok(mut child) => {
-                    info!(
-                        "Recording started: {} -> {}",
-                        input_owned,
-                        path_owned.display()
-                    );
-                    let status = child.wait().await;
-                    let mut recs = recordings.write().await;
-                    if let Some(rec) = recs.iter_mut().find(|r| r.id == rec_id) {
-                        match status {
-                            Ok(s) if s.success() => {
-                                rec.status = RecordingStatus::Stopped;
-                                info!("Recording stopped: {}", rec.filename);
-                            }
-                            Ok(s) => {
-                                rec.status = RecordingStatus::Error;
-                                error!("Recording failed with code {}", s.code().unwrap_or(-1));
-                            }
-                            Err(e) => {
-                                rec.status = RecordingStatus::Error;
-                                error!("Recording process error: {}", e);
+            info!(
+                "Recording started: {} -> {}",
+                input_owned,
+                path_owned.display()
+            );
+            loop {
+                let status = {
+                    let mut child = child.lock().await;
+                    child.try_wait()
+                };
+                match status {
+                    Ok(Some(status)) => {
+                        let mut recs = recordings.write().await;
+                        if let Some(rec) = recs.iter_mut().find(|r| r.id == rec_id) {
+                            rec.size_bytes = std::fs::metadata(&path_owned)
+                                .map(|metadata| metadata.len())
+                                .unwrap_or(0);
+                            if !matches!(rec.status, RecordingStatus::Stopped) {
+                                if status.success() {
+                                    rec.status = RecordingStatus::Stopped;
+                                    info!("Recording stopped: {}", rec.filename);
+                                } else {
+                                    rec.status = RecordingStatus::Error;
+                                    error!(
+                                        "Recording failed with code {}",
+                                        status.code().unwrap_or(-1)
+                                    );
+                                }
                             }
                         }
+                        processes.lock().await.remove(&rec_id);
+                        break;
                     }
-                }
-                Err(e) => {
-                    error!("Failed to start recording: {}", e);
-                    let mut recs = recordings.write().await;
-                    if let Some(rec) = recs.iter_mut().find(|r| r.id == rec_id) {
-                        rec.status = RecordingStatus::Error;
+                    Ok(None) => {
+                        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                    }
+                    Err(error) => {
+                        error!("Recording process error: {}", error);
+                        let mut recs = recordings.write().await;
+                        if let Some(rec) = recs.iter_mut().find(|r| r.id == rec_id) {
+                            rec.status = RecordingStatus::Error;
+                            rec.size_bytes = std::fs::metadata(&path_owned)
+                                .map(|metadata| metadata.len())
+                                .unwrap_or(0);
+                        }
+                        processes.lock().await.remove(&rec_id);
+                        break;
                     }
                 }
             }
@@ -176,14 +210,34 @@ impl RecordingManager {
     }
 
     pub async fn stop_recording(&self, id: &str) -> Result<(), String> {
-        let mut recs = self.recordings.write().await;
-        if let Some(rec) = recs.iter_mut().find(|r| r.id == id) {
-            rec.status = RecordingStatus::Stopped;
+        {
+            let mut recs = self.recordings.write().await;
+            let Some(rec) = recs.iter_mut().find(|r| r.id == id) else {
+                return Err("Recording not found".into());
+            };
+            if !matches!(rec.status, RecordingStatus::Error) {
+                rec.status = RecordingStatus::Stopped;
+            }
+            rec.size_bytes = std::fs::metadata(&rec.path)
+                .map(|metadata| metadata.len())
+                .unwrap_or(0);
             info!("Recording marked as stopped: {}", rec.filename);
-            Ok(())
-        } else {
-            Err("Recording not found".into())
         }
+
+        if let Some(child) = self.processes.lock().await.get(id).cloned() {
+            let mut child = child.lock().await;
+            if child
+                .try_wait()
+                .map_err(|error| format!("Failed to inspect recording: {error}"))?
+                .is_none()
+            {
+                child
+                    .kill()
+                    .await
+                    .map_err(|error| format!("Failed to stop recording: {error}"))?;
+            }
+        }
+        Ok(())
     }
 
     pub async fn list_recordings(&self) -> Vec<RecordingInfo> {
@@ -200,6 +254,13 @@ impl RecordingManager {
     }
 
     pub async fn delete_recording(&self, id: &str) -> Result<(), String> {
+        if self
+            .get_recording(id)
+            .await
+            .is_some_and(|recording| matches!(recording.status, RecordingStatus::Recording))
+        {
+            self.stop_recording(id).await?;
+        }
         let mut recs = self.recordings.write().await;
         if let Some(idx) = recs.iter().position(|r| r.id == id) {
             let rec = recs.remove(idx);

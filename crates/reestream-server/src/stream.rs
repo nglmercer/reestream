@@ -235,6 +235,63 @@ impl StreamManager {
             false
         }
     }
+
+    /// Apply a destination change coming from the versioned product API.
+    /// Keeping this adapter here lets the RTMP publisher keep its existing
+    /// event-driven reconnection behavior while the web API owns channel
+    /// persistence.
+    pub async fn apply_platform_event(&self, event: PlatformEvent) {
+        match event {
+            PlatformEvent::Added {
+                platform_id,
+                url,
+                key,
+            } => {
+                let exists =
+                    self.platforms.read().await.iter().any(|platform| {
+                        platform_id_from(&platform.url, &platform.key) == platform_id
+                    });
+                if !exists {
+                    self.add_platform(url_host_name(&url), url, key).await;
+                }
+            }
+            PlatformEvent::Removed { platform_id } => {
+                let id = self
+                    .platforms
+                    .read()
+                    .await
+                    .iter()
+                    .find(|platform| platform_id_from(&platform.url, &platform.key) == platform_id)
+                    .map(|platform| platform.id.clone());
+                if let Some(id) = id {
+                    self.remove_platform(&id).await;
+                }
+            }
+            PlatformEvent::Toggled {
+                platform_id,
+                enabled,
+                ..
+            } => {
+                let id = self
+                    .platforms
+                    .read()
+                    .await
+                    .iter()
+                    .find(|platform| platform_id_from(&platform.url, &platform.key) == platform_id)
+                    .map(|platform| platform.id.clone());
+                if let Some(id) = id {
+                    self.toggle_platform(&id, enabled).await;
+                }
+            }
+        }
+    }
+}
+
+fn url_host_name(url: &str) -> String {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(ToOwned::to_owned))
+        .unwrap_or_else(|| "custom destination".into())
 }
 
 #[async_trait::async_trait]

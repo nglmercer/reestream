@@ -9,14 +9,17 @@ license = "MIT OR Apache-2.0"
 [features]
 default = []
 hls = ["dep:tower-http"]
-api = []
+# The HTTP/API application state includes the preview/HLS services, so the
+# API feature must carry the same runtime dependency even for API-only builds.
+api = ["hls"]
 
 [dependencies]
 async-stream = "0.3"
 async-trait = "0.1"
-axum = { version = "0.8", features = ["ws"] }
+axum = { version = "0.8", features = ["multipart", "ws"] }
 bytes = "1.10"
 futures-util = "0.3"
+hmac = "0.12"
 reestream-core = { path = "../reestream-core" }
 reqwest = { version = "0.12.24", default-features = false, features = [
     "json",
@@ -25,6 +28,7 @@ reqwest = { version = "0.12.24", default-features = false, features = [
 rust-embed = "8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 tokio = { version = "1", default-features = false, features = [
     "io-util",
     "macros",
@@ -38,6 +42,7 @@ tokio = { version = "1", default-features = false, features = [
 tower-http = { version = "0.6", features = ["cors"], optional = true }
 tracing = { version = "0.1", features = ["log"] }
 uuid = { version = "1", features = ["v4"] }
+url = "2.5"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

@@ -17,6 +17,7 @@ use crate::dashboard;
 use crate::databus::DataBus;
 use crate::flv::{self, FlvState};
 use crate::hls::HlsSegmenter;
+use crate::playback::PlaybackManager;
 use crate::recording::RecordingManager;
 use crate::stream::{StreamManager, StreamStatus};
 
@@ -27,8 +28,10 @@ pub struct AppState {
     pub flv_state: FlvState,
     pub data_bus: DataBus,
     pub recording_manager: Arc<RecordingManager>,
+    pub playback_manager: Arc<PlaybackManager>,
     pub start_time: std::time::Instant,
     pub config_path: std::path::PathBuf,
+    pub restream: Arc<crate::restream::RestreamStore>,
 }
 
 #[derive(Serialize)]
@@ -712,6 +715,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/hls/{filename}", get(hls_segment))
         .route("/stream.flv", get(flv_stream))
         .route("/metrics", get(metrics))
+        .merge(crate::api_v1::routes(state.clone()))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
@@ -742,8 +746,10 @@ mod tests {
             flv_state: FlvState::default(),
             data_bus: crate::databus::DataBus::default(),
             recording_manager: Arc::new(RecordingManager::new(RecordingConfig::default())),
+            playback_manager: Arc::new(PlaybackManager::default()),
             start_time: std::time::Instant::now(),
             config_path: std::path::PathBuf::from("/tmp/test_config.toml"),
+            restream: Arc::new(crate::restream::RestreamStore::new()),
         }
     }
 

@@ -9,7 +9,9 @@ RTMP/SRT multistream relay server with HLS, HTTP-FLV, FFmpeg transcoding, REST A
 - **HLS server** — live `.m3u8` playlist and `.ts` segment serving
 - **HTTP-FLV** — zero-copy FLV live streaming at `/stream.flv`
 - **FFmpeg integration** — binary resolver, command builder, supervisor, download, hardware acceleration
-- **REST API** — 25 endpoints for stream/platform/config/setup/recording management
+- **Versioned product API** — `/api/v1` resources for channels, reusable streams, events, Studio, chat, analytics, storage, clips, and webhooks; legacy `/api/*` routes remain compatible
+- **Event automation** — scheduled-event promotion, FFmpeg file/playlist playback, stoppable recordings linked to storage, and optional transcription workers
+- **Provider connections** — CSRF-bound, provider-neutral OAuth authorize/token exchange with redacted persisted connection summaries
 - **Web dashboard** — Vite 8 + Preact + TypeScript + Tailwind CSS 4
 - **Video preview** — FLV/HLS player with latency monitor (flv.js)
 - **First-time setup** — CLI `--setup` wizard + dashboard web wizard
@@ -125,6 +127,15 @@ When running with `--features all`, three services start:
 | HTTP server | 8080 | Dashboard, API, HLS, FLV, metrics |
 
 ## API Endpoints
+
+The complete client contract is in [docs/API.md](docs/API.md), with a future
+web rebuild guide in [docs/CLIENT_INTEGRATION.md](docs/CLIENT_INTEGRATION.md).
+The versioned API also exposes a lightweight route document at
+`GET /api/v1/openapi.json`.
+
+For provider OAuth, configure the platform-specific `RESTREAM_OAUTH_*`
+variables described in [docs/API.md](docs/API.md); custom RTMP/SRT channels
+can be connected directly with `/api/v1/channels`.
 
 ### Health & Status
 

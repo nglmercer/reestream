@@ -32,6 +32,14 @@ pub trait DataPublisher: Send + Sync {
     fn publish(&self, stream_id: &str, data: Bytes, is_video: bool, timestamp_ms: u32);
 }
 
+/// Resolves product-level event ingest keys to the destinations selected for
+/// that event. The global config key continues to use the static platform
+/// list, while scheduled/Studio events can provide their own key and fan-out.
+#[async_trait::async_trait]
+pub trait PublishKeyResolver: Send + Sync {
+    async fn platforms_for_key(&self, stream_key: &str) -> Option<Vec<Platform>>;
+}
+
 fn is_video_sequence_header(data: &Bytes) -> bool {
     data.len() > 1 && data[0] == 0x17 && data[1] == 0x00
 }
@@ -71,12 +79,33 @@ pub async fn perform_client_handshake(
 }
 
 pub async fn handle_publisher(
+    inbound: TcpStream,
+    platforms: Arc<RwLock<Vec<Platform>>>,
+    stream_key_conf: String,
+    stream_manager: Option<Arc<dyn StreamRegistrar>>,
+    data_publisher: Option<Arc<dyn DataPublisher>>,
+    platform_events: tokio::sync::broadcast::Receiver<PlatformEvent>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    handle_publisher_with_resolver(
+        inbound,
+        platforms,
+        stream_key_conf,
+        stream_manager,
+        data_publisher,
+        platform_events,
+        None,
+    )
+    .await
+}
+
+pub async fn handle_publisher_with_resolver(
     mut inbound: TcpStream,
     platforms: Arc<RwLock<Vec<Platform>>>,
     stream_key_conf: String,
     stream_manager: Option<Arc<dyn StreamRegistrar>>,
     data_publisher: Option<Arc<dyn DataPublisher>>,
     mut platform_events: tokio::sync::broadcast::Receiver<PlatformEvent>,
+    key_resolver: Option<Arc<dyn PublishKeyResolver>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (mut server_session, leftover) = handshake_and_create_server_session(&mut inbound).await?;
     let (reconnect_tx, mut reconnect_rx) = mpsc::channel::<(usize, PushClient)>(10);
@@ -224,7 +253,15 @@ pub async fn handle_publisher(
                                 }
                             }
                             ServerSessionEvent::PublishStreamRequested { request_id, stream_key, .. } => {
-                                if stream_key == stream_key_conf {
+                                let selected_platforms = if stream_key == stream_key_conf {
+                                    Some(pls.clone())
+                                } else if let Some(ref resolver) = key_resolver {
+                                    resolver.platforms_for_key(&stream_key).await
+                                } else {
+                                    None
+                                };
+
+                                if let Some(selected_platforms) = selected_platforms {
                                     if let Ok(out) = server_session.accept_request(request_id) {
                                         for r in out {
                                             if let ServerSessionResult::OutboundResponse(p) = r {
@@ -243,7 +280,7 @@ pub async fn handle_publisher(
                                     }
 
                                     if push_clients.is_empty() {
-                                        for p in &pls {
+                                        for p in &selected_platforms {
                                             let pid = platform_id_from(p.url.as_str(), &p.key);
                                             match timeout(Duration::from_secs(5), PushClient::connect_and_publish(&p.url, p.key.clone(), None, None, None, pid.clone())).await {
                                                 Ok(Ok(pc)) => {
